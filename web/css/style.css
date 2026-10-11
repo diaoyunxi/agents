@@ -378,8 +378,13 @@ label > .label {
 .reasoning summary::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 8px; vertical-align: middle; }
 .reasoning .reasoning-body { padding: 2px 14px 12px; white-space: pre-wrap; color: var(--text-dim); font-size: 13.5px; }
 
+/* 正文与工具调用按时间顺序混排 */
+.content { display: flex; flex-direction: column; gap: 8px; }
+.round-block { display: flex; flex-direction: column; gap: 8px; }
+.round-block .md > *:last-child { margin-bottom: 0; }
+.tail { margin-top: 4px; }
+
 /* 工具调用 */
-.calls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .call {
   border: 1px solid var(--line);
   border-radius: var(--radius);

@@ -100,16 +100,17 @@ function newAssistant() {
   reasoning.appendChild(reasonBody);
   turn.appendChild(reasoning);
 
-  const calls = el('div', 'calls');
-  turn.appendChild(calls);
+  /* 正文与工具调用按时间顺序混排在同一个内容流中（每轮一个 round-block） */
+  const content = el('div', 'content');
+  turn.appendChild(content);
 
-  const answer = el('div', 'md answer');
-  turn.appendChild(answer);
+  const tail = el('div', 'md tail');
+  turn.appendChild(tail);
 
   threadInner.appendChild(turn);
   scrollDown();
-  return { turn, head, modelBadge, reasoning, reasonBody, calls, answer, answerCur: null,
-    reasonText: '', live: '', round: 0, blocks: [], raw: '' };
+  return { turn, head, modelBadge, reasoning, reasonBody, content, tail, roundBox: null,
+    answerCur: null, reasonText: '', live: '', round: 0, blocks: [], raw: '' };
 }
 
 function addToolBlock(call) {
@@ -135,7 +136,7 @@ function addToolBlock(call) {
     args.style.display = open ? 'none' : 'block';
   };
 
-  cur.calls.appendChild(box);
+  (cur.roundBox || cur.content).appendChild(box);
   scrollDown();
   const rec = { box, state, out };
   cur.blocks.push(rec);
@@ -325,8 +326,10 @@ function handle(ev) {
     case 'round': {
       cur.round = ev.index;
       cur.live = '';
+      cur.roundBox = el('div', 'round-block');
       cur.answerCur = el('div', 'md round');
-      cur.answer.appendChild(cur.answerCur);
+      cur.roundBox.appendChild(cur.answerCur);
+      cur.content.appendChild(cur.roundBox);
       break;
     }
     case 'thinking': {
@@ -345,7 +348,7 @@ function handle(ev) {
       break;
     case 'message': {
       const text = (ev.segments || []).filter(s => s.type === 'text').map(s => s.content).join('\n');
-      const target = cur.answerCur || cur.answer;
+      const target = cur.answerCur || cur.roundBox || cur.content;
       let html = text ? renderMarkdown(text)
         : (ev.tool_calls ? '<p class="hint">（本轮仅发起工具调用）</p>' : '<p class="hint">（无正文输出）</p>');
       if (ev.parse_errors) {
@@ -380,20 +383,20 @@ function handle(ev) {
       toast(ev.message, 'err');
       break;
     case 'limit':
-      cur.answer.innerHTML += '<p class="hint">' + escapeHtml(ev.message) + '</p>';
+      cur.tail.innerHTML += '<p class="hint">' + escapeHtml(ev.message) + '</p>';
       break;
     case 'stopped':
-      cur.answer.innerHTML += '<p class="hint">' + escapeHtml(ev.message || '已结束') + '</p>';
+      cur.tail.innerHTML += '<p class="hint">' + escapeHtml(ev.message || '已结束') + '</p>';
       break;
     case 'error':
-      cur.answer.innerHTML += '<p style="color:#b2492f">错误：' + escapeHtml(ev.message) + '</p>';
+      cur.tail.innerHTML += '<p style="color:#b2492f">错误：' + escapeHtml(ev.message) + '</p>';
       break;
     case 'end': {
       if (ev.changes) renderChanges(ev.changes);
       const reasonText = { stopped: '模型主动结束', idle: '未推进而结束',
         max_rounds: '达到轮数上限', parse_failed: '解析失败结束',
         error: '出错结束', completed: '完成' }[ev.reason] || ev.reason || '完成';
-      cur.answer.innerHTML += '<div class="hint" style="margin-top:12px">' + escapeHtml(reasonText) +
+      cur.tail.innerHTML += '<div class="hint" style="margin-top:12px">' + escapeHtml(reasonText) +
         ' · 轮次 ' + cur.round + ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' +
         (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
       if (cur.raw) history.push({ role: 'assistant', content: cur.raw });
@@ -459,7 +462,7 @@ async function send() {
       }
     }
   } catch (err) {
-    cur.answer.innerHTML += '<p style="color:#b2492f">' + escapeHtml(err.message) + '</p>';
+    cur.tail.innerHTML += '<p style="color:#b2492f">' + escapeHtml(err.message) + '</p>';
   } finally {
     controller = null;
     cur = null;
