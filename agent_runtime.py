@@ -19,6 +19,7 @@ import tool_parser
 from common import ChangeCollector
 from tools import loader as tool_loader
 
+
 def resolve_provider(provider_id: str = "", model: str = "") -> tuple:
     """返回 (provider, model)；请求未指定时回落到 config 中的当前选择。"""
     providers = config.get("providers", []) or []
@@ -137,11 +138,11 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                     elif kind == "content_delta":
                         content += chunk
                         yield {"event": "delta", "content": chunk}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 stream_error = str(exc)
                 try:
                     content, reasoning = await ai_client.chat(provider, chosen_model, messages)
-                except Exception as exc2:  # noqa: BLE001
+                except Exception as exc2:
                     yield {"event": "error", "message": str(exc2) or stream_error}
                     stop_reason = "error"
                     break

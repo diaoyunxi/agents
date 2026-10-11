@@ -67,7 +67,7 @@ def _notify(config: dict[str, Any]) -> None:
     for cb in list(_listeners):
         try:
             cb(config)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"[config] listener error: {exc}")
 
 
@@ -92,7 +92,7 @@ def _backup() -> None:
         backups = sorted(BACKUP_DIR.glob("config-*.json"))
         for old in backups[:-20]:
             old.unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -197,7 +197,7 @@ def start_watcher(interval: float = 2.0) -> threading.Thread:
             time.sleep(interval)
             try:
                 load()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     thread = threading.Thread(target=_loop, name="config-watcher", daemon=True)

@@ -23,7 +23,7 @@ def main() -> None:
     print("=" * 62)
     try:
         webbrowser.open(url)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     uvicorn.run("app:app", host=host, port=port, reload=False, log_level="info")
 

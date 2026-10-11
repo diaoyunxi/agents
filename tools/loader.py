@@ -53,7 +53,7 @@ def _import_siblings(folder: Path, tool_name: str) -> None:
             continue
         try:
             _load_module(py, mod_name)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"[tools] 加载辅助模块失败 {py}: {exc}")
 
 
@@ -93,7 +93,7 @@ def discover() -> dict[str, dict[str, Any]]:
                 "dangerous": bool(getattr(module, "DANGEROUS", False)),
                 "path": str(folder),
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"[tools] 加载 {name} 失败: {exc}")
             traceback.print_exc()
     return registry
@@ -188,7 +188,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
         return {"ok": False, "output": f"工具 `{name}` 执行失败: {exc}"}
     except TypeError as exc:
         return {"ok": False, "output": f"工具 `{name}` 参数错误: {exc}"}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"ok": False, "output": f"工具 `{name}` 抛出异常: {exc}\n{traceback.format_exc(limit=3)}"}
 
     if isinstance(result, str):
