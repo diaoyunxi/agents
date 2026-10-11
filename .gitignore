@@ -6,3 +6,5 @@ venv/
 *.log
 config.json
 chat/
+# 反向代理拉取的第三方参考项目（只读参考，不纳入版本库）
+_ref_*/
