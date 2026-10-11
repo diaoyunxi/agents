@@ -9,58 +9,67 @@
 <body>
 
 <div class="topbar">
-  <div class="brand">🤖 Agents</div>
-  <select id="providerSel" title="AI 提供商"></select>
-  <select id="modelSel" title="模型"></select>
-  <button class="ghost" id="reloadModels" title="重新获取模型列表">↻</button>
-  <div class="grow"></div>
-  <span id="status" class="hint"></span>
-  <button class="ghost" id="toggleSide">文件变更 <span class="badge" id="changeCount">0</span></button>
+  <div class="brand"><span class="mark"></span>Agents<span class="sub">Console</span></div>
+  <span class="grow"></span>
+  <select id="providerSel" style="width:170px" title="AI 提供商"></select>
+  <select id="modelSel" style="width:220px" title="模型"></select>
+  <button class="ghost" id="reloadModels" title="重新获取模型列表">刷新</button>
+  <span class="hint" id="status"></span>
+  <button class="quiet" id="togglePanel">文件变更 <span class="badge" id="changeCount">0</span></button>
   <a class="hint" href="/settings">设置</a>
   <button class="ghost" id="logout">退出</button>
 </div>
 
-<div class="wrap">
-  <div class="main">
-    <div class="messages" id="messages">
-      <div class="msg">
-        <div class="who">👋 欢迎</div>
-        <div class="md">
-          <p>直接描述你的需求，我会调用工作区里的工具来完成任务。</p>
-          <ul>
-            <li>左侧中间会显示我的思考、正文输出与工具调用全过程（支持 Markdown）。</li>
-            <li>右侧栏会实时汇总我对你文件的所有改动。</li>
-            <li>工具定义在 <code>tools/</code>，技能在 <code>skills/</code>，均可自行扩展。</li>
-          </ul>
+<div class="workspace">
+  <div class="stage">
+    <div class="thread" id="thread">
+      <div class="thread-inner">
+        <div class="turn agent">
+          <div class="turn-head">
+            <span class="role">Agent</span><span class="rule"></span><span>就绪</span>
+          </div>
+          <div class="md">
+            <p>描述你的需求，我会调用工作区中的工具完成任务，运行过程会在此处完整呈现。</p>
+          </div>
+          <div class="intro-grid">
+            <div class="intro-item"><div class="k">过程可见</div>思考、输出与每次工具调用的参数和结果都会逐条展示，正文支持 Markdown。</div>
+            <div class="intro-item"><div class="k">变更可查</div>右侧面板实时汇总我对工作区文件的新增与删除，可展开查看 diff。</div>
+            <div class="intro-item"><div class="k">易于扩展</div>工具在 tools/ 目录，技能在 skills/ 目录，MCP 服务器可在设置页接入。</div>
+          </div>
         </div>
       </div>
     </div>
 
     <div class="composer">
-      <div class="box">
-        <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
-        <button class="primary" id="send">发送</button>
-        <button class="ghost" id="stop" style="display:none">停止</button>
-      </div>
-      <div class="chips" id="chips">
-        <span class="chip" data-p="列出工作区的目录结构">看看工作区结构</span>
-        <span class="chip" data-p="介绍一下你现在能用哪些工具">我有哪些工具</span>
-        <span class="chip" data-p="读一下 README 或项目入口文件并总结">总结项目</span>
+      <div class="composer-inner">
+        <div class="composer-box">
+          <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        </div>
+        <div class="composer-actions">
+          <button class="primary" id="send">发送</button>
+          <button class="danger" id="stop" style="display:none">停止生成</button>
+          <span class="grow"></span>
+          <span class="meta">Enter 发送 · Shift+Enter 换行</span>
+        </div>
+        <div class="suggestions" id="suggestions">
+          <span class="suggestion" data-p="列出工作区的目录结构并说明每项用途">看看工作区结构</span>
+          <span class="suggestion" data-p="列出你现在可用的全部工具并简要说明各自作用">我有哪些工具</span>
+          <span class="suggestion" data-p="读取项目入口文件并用中文总结它的作用">总结项目</span>
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="side" id="side">
-    <div class="side-head">
-      <b>文件变更</b>
-      <span class="badge" id="sideCount">0</span>
-      <div class="grow" style="flex:1"></div>
+  <aside class="panel" id="panel">
+    <div class="panel-head">
+      <span class="grow">文件变更</span>
+      <span class="badge orange" id="sideCount">0</span>
       <button class="ghost" id="clearChanges">清空</button>
     </div>
-    <div class="side-body" id="changes">
+    <div class="panel-body" id="changes">
       <div class="empty">本次会话中 AI 对文件的改动会显示在这里</div>
     </div>
-  </div>
+  </aside>
 </div>
 
 <script src="/static/js/common.js"></script>

@@ -1,11 +1,16 @@
 /* 对话页：SSE 流式渲染思考 / 正文 / 工具调用，右侧汇总文件变更 */
 
-const messagesEl = document.getElementById('messages');
+const threadEl = document.getElementById('thread');
+const threadInner = threadEl.querySelector('.thread-inner');
 const changesEl = document.getElementById('changes');
 const history = [];
 let controller = null;
 let cur = null;
 let lastChangeKey = '';
+
+function scrollDown() {
+  threadEl.scrollTop = threadEl.scrollHeight;
+}
 
 /* ---------- 模型选择 ---------- */
 async function loadModels() {
@@ -53,18 +58,19 @@ document.getElementById('logout').onclick = async function () {
   location.href = '/';
 };
 
-document.getElementById('toggleSide').onclick = function () {
-  document.getElementById('side').classList.toggle('hidden');
+document.getElementById('togglePanel').onclick = function () {
+  document.getElementById('panel').classList.toggle('collapsed');
 };
 
 document.getElementById('clearChanges').onclick = function () {
   changesEl.innerHTML = '<div class="empty">已清空</div>';
   lastChangeKey = '';
   document.getElementById('changeCount').textContent = '0';
+  document.getElementById('sideCount').textContent = '0';
 };
 
-document.getElementById('chips').onclick = function (e) {
-  if (e.target.classList.contains('chip')) {
+document.getElementById('suggestions').onclick = function (e) {
+  if (e.target.classList.contains('suggestion')) {
     document.getElementById('input').value = e.target.dataset.p;
     send();
   }
@@ -72,55 +78,68 @@ document.getElementById('chips').onclick = function (e) {
 
 /* ---------- 消息渲染 ---------- */
 function newAssistant() {
-  const wrap = el('div', 'msg assistant');
-  const who = el('div', 'who');
-  who.appendChild(el('span', null, 'Agent'));
-  const modelBadge = el('span', 'badge', '…');
-  who.appendChild(modelBadge);
-  who.appendChild(el('span', null, now()));
-  wrap.appendChild(who);
+  const turn = el('div', 'turn agent');
 
-  const think = el('details', 'think');
-  think.appendChild(el('summary', null, '🧠 思考过程'));
-  const thinkBody = el('div', 'think-body');
-  think.appendChild(thinkBody);
-  wrap.appendChild(think);
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', 'Agent'));
+  const modelBadge = el('span', 'badge orange', '连接中');
+  head.appendChild(modelBadge);
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, now()));
+  turn.appendChild(head);
 
-  const tools = el('div', 'tools');
-  wrap.appendChild(tools);
-  const out = el('div', 'md out');
-  wrap.appendChild(out);
-  messagesEl.appendChild(wrap);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  return { wrap, who, modelBadge, think, thinkBody, tools, out, outCur: null,
-    thinkText: '', live: '', round: 0, blocks: [], raw: '' };
+  const reasoning = el('details', 'reasoning');
+  reasoning.style.display = 'none';
+  reasoning.appendChild(el('summary', null, '思考过程'));
+  const reasonBody = el('div', 'reasoning-body');
+  reasoning.appendChild(reasonBody);
+  turn.appendChild(reasoning);
+
+  const calls = el('div', 'calls');
+  turn.appendChild(calls);
+
+  const answer = el('div', 'md answer');
+  turn.appendChild(answer);
+
+  threadInner.appendChild(turn);
+  scrollDown();
+  return { turn, head, modelBadge, reasoning, reasonBody, calls, answer, answerCur: null,
+    reasonText: '', live: '', round: 0, blocks: [], raw: '' };
 }
 
 function addToolBlock(call) {
-  const box = el('div', 'tool');
-  const head = el('div', 'tool-head');
-  head.appendChild(el('span', null, '🔧'));
+  const box = el('div', 'call');
+  const head = el('div', 'call-head');
+  head.appendChild(el('span', 'tag', '工具'));
   head.appendChild(el('span', 'nm', call.tool));
   head.appendChild(el('span', 'grow'));
-  const state = el('span', 'badge', '执行中');
+  const state = el('span', 'badge grey', '执行中');
   head.appendChild(state);
-  const args = el('div', 'tool-body args', JSON.stringify(call.arguments || {}, null, 2));
-  const out = el('div', 'tool-body');
+
+  const args = el('pre', 'call-body args', JSON.stringify(call.arguments || {}, null, 2));
+  const out = el('pre', 'call-body');
   out.style.display = 'none';
-  box.appendChild(head); box.appendChild(args); box.appendChild(out);
+
+  box.appendChild(head);
+  box.appendChild(args);
+  box.appendChild(out);
+
   head.onclick = function () {
     const open = out.style.display === 'none';
     out.style.display = open ? 'block' : 'none';
     args.style.display = open ? 'none' : 'block';
   };
-  cur.tools.appendChild(box);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  cur.calls.appendChild(box);
+  scrollDown();
   const rec = { box, state, out };
   cur.blocks.push(rec);
   return rec;
 }
 
-/* ---------- 文件变更侧边栏 ---------- */
+/* ---------- 文件变更面板 ---------- */
+const ACTION_LABEL = { create: '新建', modify: '修改', delete: '删除' };
+
 function renderChanges(list) {
   const key = JSON.stringify(list.map(c => [c.path, c.action, c.time]));
   if (key === lastChangeKey) return;
@@ -134,26 +153,22 @@ function renderChanges(list) {
   }
   list.forEach(function (c) {
     const box = el('div', 'change');
-    const head = el('div', 'ch');
-    head.appendChild(el('span', null, c.action === 'create' ? '🆕' : (c.action === 'delete' ? '🗑️' : '✏️')));
-    head.appendChild(el('span', 'grow', c.path));
-    head.appendChild(el('span', 'add', '+' + c.additions));
-    head.appendChild(el('span', 'del', '-' + c.deletions));
+    const head = el('div', 'change-head');
+    head.appendChild(el('span', 'badge grey', ACTION_LABEL[c.action] || c.action));
+    head.appendChild(el('span', 'change-path', c.path));
+    const stats = el('span', 'change-stats');
+    stats.appendChild(el('span', 'plus', '+' + c.additions));
+    stats.appendChild(document.createTextNode(' '));
+    stats.appendChild(el('span', 'minus', '-' + c.deletions));
+    head.appendChild(stats);
+
     const pre = document.createElement('pre');
     pre.innerHTML = renderDiff(c.diff);
     pre.style.display = 'none';
-    const view = el('span', 'badge', '全文');
-    view.onclick = async function (ev) {
-      ev.stopPropagation();
-      try {
-        const res = await api('/api/file?path=' + encodeURIComponent(c.path));
-        pre.innerHTML = renderDiff('--- ' + c.path + ' ---\n' + res.content);
-        pre.style.display = 'block';
-      } catch (err) { toast(err.message, 'err'); }
-    };
-    head.appendChild(view);
+
     head.onclick = function () { pre.style.display = pre.style.display === 'none' ? 'block' : 'none'; };
-    box.appendChild(head); box.appendChild(pre);
+    box.appendChild(head);
+    box.appendChild(pre);
     changesEl.appendChild(box);
   });
 }
@@ -168,30 +183,31 @@ function handle(ev) {
     case 'round': {
       cur.round = ev.index;
       cur.live = '';
-      cur.outCur = el('div', 'md round');
-      cur.out.appendChild(cur.outCur);
+      cur.answerCur = el('div', 'md round');
+      cur.answer.appendChild(cur.answerCur);
       break;
     }
     case 'thinking': {
-      cur.thinkText += ev.content;
-      cur.think.style.display = 'block';
-      cur.thinkBody.textContent = cur.thinkText;
+      cur.reasonText += ev.content;
+      cur.reasoning.style.display = 'block';
+      cur.reasoning.open = true;
+      cur.reasonBody.textContent = cur.reasonText;
       break;
     }
     case 'delta':
       cur.live += ev.content;
-      if (cur.outCur) {
-        cur.outCur.innerHTML = '<span class="badge">输出中…</span> ' + escapeHtml(cur.live.slice(-1500));
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+      if (cur.answerCur) {
+        cur.answerCur.innerHTML = '<span class="badge grey">输出中</span> ' + escapeHtml(cur.live.slice(-1500));
+        scrollDown();
       }
       break;
     case 'message': {
       const text = (ev.segments || []).filter(s => s.type === 'text').map(s => s.content).join('\n');
-      const target = cur.outCur || cur.out;
+      const target = cur.answerCur || cur.answer;
       target.innerHTML = text ? renderMarkdown(text)
         : (ev.tool_calls ? '<p class="hint">（本轮仅发起工具调用）</p>' : '<p class="hint">（无正文输出）</p>');
       cur.raw += (ev.raw || '');
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollDown();
       break;
     }
     case 'tool_start':
@@ -201,9 +217,9 @@ function handle(ev) {
       const blk = cur.blocks[cur.blocks.length - 1];
       if (blk) {
         blk.state.textContent = ev.ok ? '成功' : '失败';
-        blk.state.className = 'badge ' + (ev.ok ? 'green' : 'amber');
+        blk.state.className = 'badge ' + (ev.ok ? 'green' : 'orange');
         blk.out.textContent = ev.output || '(无输出)';
-        if (!ev.ok) blk.box.classList.add('err');
+        if (!ev.ok) blk.box.classList.add('fail');
       }
       break;
     }
@@ -214,14 +230,14 @@ function handle(ev) {
       toast(ev.message, 'err');
       break;
     case 'limit':
-      cur.out.innerHTML += '<p class="hint">' + escapeHtml(ev.message) + '</p>';
+      cur.answer.innerHTML += '<p class="hint">' + escapeHtml(ev.message) + '</p>';
       break;
     case 'error':
-      cur.out.innerHTML += '<p style="color:var(--red)">错误：' + escapeHtml(ev.message) + '</p>';
+      cur.answer.innerHTML += '<p style="color:#b2492f">错误：' + escapeHtml(ev.message) + '</p>';
       break;
     case 'end':
       if (ev.changes) renderChanges(ev.changes);
-      cur.out.innerHTML += '<div class="hint" style="margin-top:10px">轮次 ' + cur.round +
+      cur.answer.innerHTML += '<div class="hint" style="margin-top:12px">轮次 ' + cur.round +
         ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' + (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
       if (cur.raw) history.push({ role: 'assistant', content: cur.raw });
       break;
@@ -234,18 +250,22 @@ async function send() {
   if (!text || controller) return;
   input.value = '';
 
-  const userMsg = el('div', 'msg user');
-  userMsg.appendChild(el('div', 'who', '👤 我 · ' + now()));
-  userMsg.appendChild(el('div', 'bubble', text));
-  messagesEl.appendChild(userMsg);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  const turn = el('div', 'turn user');
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', '你'));
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, now()));
+  turn.appendChild(head);
+  turn.appendChild(el('div', 'user-text', text));
+  threadInner.appendChild(turn);
+  scrollDown();
   history.push({ role: 'user', content: text });
 
   cur = newAssistant();
   controller = new AbortController();
   document.getElementById('send').style.display = 'none';
   document.getElementById('stop').style.display = 'inline-block';
-  document.getElementById('status').innerHTML = '<span class="spin"></span> 生成中…';
+  document.getElementById('status').innerHTML = '<span class="spinner"></span> 生成中';
 
   try {
     const resp = await fetch('/api/chat', {
@@ -279,14 +299,14 @@ async function send() {
       }
     }
   } catch (err) {
-    cur.out.innerHTML += '<p style="color:var(--red)">' + escapeHtml(err.message) + '</p>';
+    cur.answer.innerHTML += '<p style="color:#b2492f">' + escapeHtml(err.message) + '</p>';
   } finally {
     controller = null;
     cur = null;
     document.getElementById('send').style.display = 'inline-block';
     document.getElementById('stop').style.display = 'none';
     document.getElementById('status').textContent = '';
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    scrollDown();
     input.focus();
   }
 }

@@ -71,7 +71,7 @@ async function saveProvider() {
 
 async function fetchModels() {
   const info = document.getElementById('modelInfo');
-  info.innerHTML = '<span class="spin"></span> 正在获取模型列表…';
+  info.innerHTML = '<span class="spinner"></span> 正在获取模型列表';
   const btn = document.getElementById('nextBtn');
   btn.disabled = true;
   try {

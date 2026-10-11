@@ -6,7 +6,7 @@ document.getElementById('tabs').onclick = function (e) {
   const btn = e.target.closest('button');
   if (!btn) return;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b === btn));
-  document.querySelectorAll('.page > div[id^="panel-"]').forEach(function (p) {
+  document.querySelectorAll('.settings-content > div[id^="panel-"]').forEach(function (p) {
     p.style.display = p.id === 'panel-' + btn.dataset.tab ? 'block' : 'none';
   });
 };
@@ -44,11 +44,13 @@ function paintProviders() {
   document.getElementById('provCount').textContent = list.length;
   if (!list.length) { box.innerHTML = '<div class="empty">还没有配置任何提供商</div>'; }
   list.forEach(function (p) {
-    const row = el('div', 'list-row');
-    row.appendChild(el('span', 'grow'));
-    const g = row.lastChild;
-    g.appendChild(el('div', 'nm', p.name + (p.id === cfg.ai.active_provider_id ? ' · 使用中' : '')));
+    const isActive = p.id === cfg.ai.active_provider_id;
+    const row = el('div', 'list-row' + (isActive ? ' active' : ''));
+    const g = el('div', 'grow');
+    row.appendChild(g);
+    g.appendChild(el('div', 'nm', p.name + (isActive ? ' · 使用中' : '')));
     g.appendChild(el('div', 'sub2', p.base_url));
+    if (isActive) row.insertBefore(el('span', 'badge green', '默认'), g);
     const edit = el('button', 'ghost', '编辑');
     edit.onclick = function () {
       document.getElementById('fId').value = p.id;
@@ -226,7 +228,8 @@ function paintTools() {
     tools.forEach(function (t) {
       const row = el('div', 'list-row');
       const g = el('div', 'grow');
-      g.appendChild(el('div', 'nm', t.name + (t.dangerous ? ' ⚠️' : '')));
+      g.appendChild(el('div', 'nm', t.name));
+      if (t.dangerous) g.appendChild(el('span', 'badge orange', '高风险'));
       g.appendChild(el('div', 'sub2', t.description || ''));
       row.appendChild(g);
       const doc = el('button', 'ghost', '查看文档');
