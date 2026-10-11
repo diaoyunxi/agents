@@ -51,7 +51,7 @@ agents/
 前端为纯展示层，采用 Anthropic 品牌规范：墨色 `#141413` / 米白 `#faf9f5` / 中灰 `#b0aea5` / 浅灰 `#e8e6dc`，强调色为橙 `#d97757`、蓝 `#6a9bcc`、绿 `#788c5d`；标题使用 Poppins（回退 Arial），正文使用 Lora（回退 Georgia）。界面不使用任何表情符号，状态一律以文字标签与颜色区分。
 
 - `/` 登录与新手引导
-- `/chat` 对话：中间逐轮展示思考、输出、工具调用全过程；右侧面板汇总文件变更
+- `/chat` 对话：中间逐轮展示思考、输出、工具调用全过程；右侧面板汇总文件变更；输入框上方可为每轮对话指定工作区（留空使用默认工作区）
 - `/settings` 设置：左侧导航切换 AI 提供商、模型与默认、工具与限制、MCP、技能与提示词、账号
 
 ## 自动更新
@@ -70,7 +70,7 @@ agents/
 
 | 字段 | 说明 |
 | --- | --- |
-| `server` | `host`、`port`、`workspace`（Agent 可访问的工作区根目录） |
+| `server` | `host`、`port`、`workspace`（默认工作区根目录；对话页可为每轮对话临时覆盖） |
 | `auth` | `enabled`、`username`、`password`、`setup_done` |
 | `providers` | 多个 AI 提供商：`name`、`base_url`、`api_key`、`models`、`default_model`、`headers` |
 | `ai` | `active_provider_id`、`active_model`、`max_tokens`、`temperature`、`timeout` |

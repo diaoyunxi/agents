@@ -440,6 +440,11 @@ label > .label {
 .composer-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .composer-actions .meta { font-size: 12px; color: var(--text-soft); }
 
+.composer-scope { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.composer-scope .meta { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
+.composer-scope input { flex: 0 0 320px; font-size: 13px; }
+.composer-scope #wsReal { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+
 .suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .suggestion {
   font-family: var(--font-head);

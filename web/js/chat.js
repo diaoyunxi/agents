@@ -17,6 +17,42 @@ function scrollDown() {
   threadEl.scrollTop = threadEl.scrollHeight;
 }
 
+/* ---------- 工作区（每轮对话开始时生效） ---------- */
+let defaultWorkspace = '';
+
+function wsValue() { return document.getElementById('wsInput').value.trim(); }
+
+function paintWorkspaceHint() {
+  const node = document.getElementById('wsReal');
+  const typed = wsValue();
+  const text = typed ? ('本次：' + typed) : (defaultWorkspace ? ('默认：' + defaultWorkspace) : '');
+  node.textContent = text;
+  node.title = text;
+}
+
+function setWorkspaceReal(path) {
+  const node = document.getElementById('wsReal');
+  node.textContent = path ? ('本次：' + path) : '';
+  node.title = node.textContent;
+}
+
+async function loadDefaultWorkspace() {
+  try {
+    const res = await api('/api/health');
+    defaultWorkspace = res.workspace || '';
+  } catch (err) { /* 忽略 */ }
+  const input = document.getElementById('wsInput');
+  input.placeholder = defaultWorkspace ? ('留空使用默认工作区（' + defaultWorkspace + '）') : '留空使用默认工作区';
+  paintWorkspaceHint();
+}
+
+document.getElementById('wsInput').addEventListener('input', function () { paintWorkspaceHint(); });
+document.getElementById('wsDefault').onclick = function () {
+  document.getElementById('wsInput').value = '';
+  paintWorkspaceHint();
+  document.getElementById('wsInput').focus();
+};
+
 /* ---------- 模型选择 ---------- */
 async function loadModels() {
   const res = await api('/api/providers');
@@ -264,6 +300,8 @@ async function loadConversationById(id) {
     const res = await api('/api/conversations/' + id);
     currentConvId = res.conversation.id;
     convTitle = res.conversation.title || '新对话';
+    document.getElementById('wsInput').value = res.conversation.workspace || '';
+    paintWorkspaceHint();
     history.length = 0;
     (res.conversation.messages || []).forEach(function (m) {
       history.push({ role: m.role, content: m.content });
@@ -282,7 +320,7 @@ async function loadConversationById(id) {
 
 async function ensureConversation() {
   if (currentConvId) return currentConvId;
-  const res = await api('/api/conversations', { body: {} });
+  const res = await api('/api/conversations', { body: { workspace: wsValue() } });
   currentConvId = res.conversation.id;
   convTitle = res.conversation.title || '新对话';
   await refreshConversationList();
@@ -301,7 +339,7 @@ async function saveConversation() {
   try {
     await api('/api/conversations/' + currentConvId, {
       method: 'PUT',
-      body: { messages: history, title: convTitle },
+      body: { messages: history, title: convTitle, workspace: wsValue() },
     });
     await refreshConversationList();
   } catch (err) { /* 静默保存失败 */ }
@@ -311,6 +349,8 @@ document.getElementById('newChat').onclick = async function () {
   currentConvId = null;
   convTitle = '';
   history.length = 0;
+  document.getElementById('wsInput').value = '';
+  paintWorkspaceHint();
   await ensureConversation();
   showIntroPlaceholder();
   document.getElementById('input').focus();
@@ -322,6 +362,7 @@ function handle(ev) {
     case 'start':
       cur.modelBadge.textContent = ev.model;
       document.getElementById('status').textContent = ev.provider + ' · ' + ev.model;
+      if (ev.workspace) setWorkspaceReal(ev.workspace);
       break;
     case 'round': {
       cur.round = ev.index;
@@ -438,7 +479,8 @@ async function send() {
         message: text,
         history: history.slice(0, -1),
         provider_id: document.getElementById('providerSel').value,
-        model: document.getElementById('modelSel').value
+        model: document.getElementById('modelSel').value,
+        workspace: wsValue()
       }),
       signal: controller.signal
     });
@@ -482,4 +524,5 @@ document.getElementById('input').addEventListener('keydown', function (e) {
 
 loadModels().catch(err => toast(err.message, 'err'));
 refreshConversationList().catch(err => toast(err.message, 'err'));
+loadDefaultWorkspace().catch(err => toast(err.message, 'err'));
 

@@ -11,8 +11,10 @@ import os
 import shutil
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -52,6 +54,9 @@ _lock = threading.RLock()
 _cache: dict[str, Any] = {}
 _cache_mtime: float = 0.0
 _listeners: list[Callable[[dict[str, Any]], None]] = []
+
+# 对话级工作区覆盖：为空表示使用 config.json 中的默认工作区
+_workspace_override: ContextVar[Path | None] = ContextVar("workspace_override", default=None)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -174,12 +179,43 @@ def set_value(path: str, value: Any) -> dict[str, Any]:
     return update(_mutate)
 
 
-def workspace_dir() -> Path:
-    ws = Path(get("server.workspace", "."))
+def resolve_workspace(path: str | Path | None = None) -> Path:
+    """把工作区路径解析为绝对路径；相对路径基于程序目录。"""
+
+    raw = str(path).strip() if path is not None else ""
+    ws = Path(raw or ".")
     if not ws.is_absolute():
         ws = (BASE_DIR / ws).resolve()
+    return ws
+
+
+def workspace_dir() -> Path:
+    """返回当前生效的工作区；对话进行中可能被 use_workspace 临时覆盖。"""
+
+    override = _workspace_override.get()
+    ws = override if override is not None else resolve_workspace(get("server.workspace", "."))
     ws.mkdir(parents=True, exist_ok=True)
     return ws
+
+
+@contextmanager
+def use_workspace(path: str | Path | None = None) -> Iterator[Path]:
+    """在上下文内把工作区切换为 path（空值表示沿用默认工作区）。
+
+    仅影响当前请求的任务上下文，多个对话互不干扰。
+    """
+
+    raw = "" if path is None else str(path).strip()
+    if not raw:
+        yield workspace_dir()
+        return
+    resolved = resolve_workspace(raw)
+    resolved.mkdir(parents=True, exist_ok=True)
+    token = _workspace_override.set(resolved)
+    try:
+        yield resolved
+    finally:
+        _workspace_override.reset(token)
 
 
 def tools_dir() -> Path:

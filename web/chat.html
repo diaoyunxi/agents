@@ -52,6 +52,12 @@
 
     <div class="composer">
       <div class="composer-inner">
+        <div class="composer-scope">
+          <span class="meta">工作区</span>
+          <input id="wsInput" placeholder="留空使用默认工作区">
+          <button class="ghost" id="wsDefault" title="恢复默认工作区">默认</button>
+          <span class="hint grow" id="wsReal"></span>
+        </div>
         <div class="composer-box">
           <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
         </div>

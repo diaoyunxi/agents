@@ -181,6 +181,18 @@ async def api_put_config(request: Request, payload: dict = Body(...)):
     require_auth(request)
     allowed_top = {"auth", "ai", "tool_limits", "mcp_servers", "server", "ui"}
 
+    server_patch = (payload or {}).get("server")
+    if isinstance(server_patch, dict) and "workspace" in server_patch:
+        raw = str(server_patch.get("workspace") or ".").strip() or "."
+        target = config.resolve_workspace(raw)
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"工作区路径不可用：{exc}")
+        if not target.is_dir():
+            raise HTTPException(status_code=400, detail="工作区路径不是目录")
+        server_patch["workspace"] = raw
+
     def _mutate(cfg):
         for key, value in (payload or {}).items():
             if key in allowed_top and isinstance(value, dict):
@@ -440,11 +452,21 @@ async def api_chat(request: Request, payload: dict = Body(...)):
     history = payload.get("history") or []
     provider_id = str(payload.get("provider_id", "") or "")
     model = str(payload.get("model", "") or "")
+    workspace = str(payload.get("workspace", "") or "").strip()
+    if workspace:
+        ws_path = config.resolve_workspace(workspace)
+        try:
+            ws_path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"工作区不可用：{exc}")
+        if not ws_path.is_dir():
+            raise HTTPException(status_code=400, detail="工作区路径不是目录，请填写目录路径")
 
     async def event_stream():
         try:
-            async for event in agent_runtime.run_chat(message, history, provider_id, model):
-                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+            with config.use_workspace(workspace):
+                async for event in agent_runtime.run_chat(message, history, provider_id, model):
+                    yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
         except Exception as exc:  # noqa: BLE001
             yield "data: " + json.dumps({"event": "error", "message": str(exc)}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"event": "end", "reason": "error"}, ensure_ascii=False) + "\n\n"
@@ -473,6 +495,7 @@ async def api_list_conversations(request: Request):
         items.append({
             "id": data.get("id", p.stem),
             "title": data.get("title", "未命名对话"),
+            "workspace": data.get("workspace", ""),
             "created_at": data.get("created_at", ""),
             "updated_at": data.get("updated_at", ""),
             "message_count": len(data.get("messages", [])),
@@ -485,10 +508,12 @@ async def api_create_conversation(request: Request, payload: dict = Body(default
     require_auth(request)
     cid = str(payload.get("id") or secrets.token_hex(8))
     title = str(payload.get("title", "新对话")).strip() or "新对话"
+    workspace = str(payload.get("workspace", "") or "").strip()
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     conv = {
         "id": cid,
         "title": title,
+        "workspace": workspace,
         "created_at": stamp,
         "updated_at": stamp,
         "messages": [],
@@ -515,6 +540,8 @@ async def api_update_conversation(cid: str, request: Request, payload: dict = Bo
     data = json.loads(path.read_text(encoding="utf-8"))
     if "title" in payload:
         data["title"] = str(payload["title"]).strip() or data.get("title", "新对话")
+    if "workspace" in payload:
+        data["workspace"] = str(payload.get("workspace") or "").strip()
     if "messages" in payload:
         data["messages"] = [
             {"role": m.get("role"), "content": str(m.get("content", ""))}
