@@ -25,7 +25,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "auth": {
         "enabled": True,
         "username": "root",
-        "password": "root",
+        "password": "",  # 安全修复：首次启动时生成随机密码，避免默认弱口令
         "setup_done": False,
     },
     "ai": {
@@ -108,7 +108,12 @@ def load(force: bool = False) -> dict[str, Any]:
     global _cache, _cache_mtime
     with _lock:
         if not CONFIG_PATH.exists():
-            save(DEFAULT_CONFIG)
+            # 安全修复：首次生成随机密码，避免默认弱口令暴露
+            import secrets
+            initial = _deep_merge(DEFAULT_CONFIG, {})
+            initial["auth"]["password"] = secrets.token_urlsafe(16)
+            save(initial)
+            print(f"[config] 首次启动，已生成随机密码。请通过 Web 界面查看。")
             return _cache
         try:
             mtime = CONFIG_PATH.stat().st_mtime
