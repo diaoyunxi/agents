@@ -240,15 +240,23 @@ function handle(ev) {
     case 'limit':
       cur.answer.innerHTML += '<p class="hint">' + escapeHtml(ev.message) + '</p>';
       break;
+    case 'stopped':
+      cur.answer.innerHTML += '<p class="hint">' + escapeHtml(ev.message || '已结束') + '</p>';
+      break;
     case 'error':
       cur.answer.innerHTML += '<p style="color:#b2492f">错误：' + escapeHtml(ev.message) + '</p>';
       break;
-    case 'end':
+    case 'end': {
       if (ev.changes) renderChanges(ev.changes);
-      cur.answer.innerHTML += '<div class="hint" style="margin-top:12px">轮次 ' + cur.round +
-        ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' + (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
+      const reasonText = { stopped: '模型主动结束', idle: '未推进而结束',
+        max_rounds: '达到轮数上限', parse_failed: '解析失败结束',
+        error: '出错结束', completed: '完成' }[ev.reason] || ev.reason || '完成';
+      cur.answer.innerHTML += '<div class="hint" style="margin-top:12px">' + escapeHtml(reasonText) +
+        ' · 轮次 ' + cur.round + ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' +
+        (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
       if (cur.raw) history.push({ role: 'assistant', content: cur.raw });
       break;
+    }
   }
 }
 
