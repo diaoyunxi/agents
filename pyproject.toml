@@ -1,0 +1,22 @@
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S", "RET", "RUF"]
+ignore = [
+    "S603",    # subprocess call with shell=False is safe
+    "S607",    # starting a process with a partial executable path
+    "S101",    # use of assert
+    "E501",    # line too long (handled by formatter)
+    "RUF001",  # ambiguous unicode characters in Chinese strings
+    "RUF002",  # ambiguous unicode characters in docstrings
+    "RUF003",  # ambiguous unicode characters in comments
+    "BLE001",  # blind exception catch (intentional in this project)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agents"]
