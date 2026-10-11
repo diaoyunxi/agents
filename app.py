@@ -11,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 
+from typing import Annotated
+
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -104,7 +106,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 
 @app.post("/api/auth/login")
-async def api_login(payload: dict = Body(...)):
+async def api_login(payload: Annotated[dict, Body()]):
     cfg = config.get("auth", {}) or {}
     if not cfg.get("enabled", True):
         token = _new_token()
@@ -147,7 +149,7 @@ async def api_auth_status(request: Request):
 
 
 @app.post("/api/auth/password")
-async def api_change_password(request: Request, payload: dict = Body(...)):
+async def api_change_password(request: Request, payload: Annotated[dict, Body()]):
     require_auth(request)
     old = str(payload.get("old_password", ""))
     new = str(payload.get("new_password", ""))
@@ -177,7 +179,7 @@ async def api_get_config(request: Request):
 
 
 @app.put("/api/config")
-async def api_put_config(request: Request, payload: dict = Body(...)):
+async def api_put_config(request: Request, payload: Annotated[dict, Body()]):
     require_auth(request)
     allowed_top = {"auth", "ai", "tool_limits", "mcp_servers", "server", "ui"}
 
@@ -229,7 +231,7 @@ async def api_list_providers(request: Request):
 
 
 @app.post("/api/providers")
-async def api_add_provider(request: Request, payload: dict = Body(...)):
+async def api_add_provider(request: Request, payload: Annotated[dict, Body()]):
     require_auth(request)
     name = str(payload.get("name", "")).strip()
     base_url = str(payload.get("base_url", "")).strip()
@@ -276,7 +278,7 @@ async def api_delete_provider(pid: str, request: Request):
 
 
 @app.post("/api/providers/{pid}/models")
-async def api_fetch_models(pid: str, request: Request, payload: dict = Body(default={})):
+async def api_fetch_models(pid: str, request: Request, payload: Annotated[dict, Body(default_factory=dict)]):
     require_auth(request)
     provider = dict(_find_provider(pid))
     for key in ("base_url", "api_key", "name"):
@@ -302,7 +304,7 @@ async def api_fetch_models(pid: str, request: Request, payload: dict = Body(defa
 
 
 @app.post("/api/providers/{pid}/test")
-async def api_test_provider(pid: str, request: Request, payload: dict = Body(default={})):
+async def api_test_provider(pid: str, request: Request, payload: Annotated[dict, Body(default_factory=dict)]):
     require_auth(request)
     provider = dict(_find_provider(pid))
     for key in ("base_url", "api_key"):
@@ -316,7 +318,7 @@ async def api_test_provider(pid: str, request: Request, payload: dict = Body(def
 
 
 @app.post("/api/providers/{pid}/select")
-async def api_select_model(pid: str, request: Request, payload: dict = Body(...)):
+async def api_select_model(pid: str, request: Request, payload: Annotated[dict, Body()]):
     require_auth(request)
     _find_provider(pid)
     model = str(payload.get("model", "")).strip()
@@ -444,7 +446,7 @@ async def api_file(request: Request, path: str):
 
 
 @app.post("/api/chat")
-async def api_chat(request: Request, payload: dict = Body(...)):
+async def api_chat(request: Request, payload: Annotated[dict, Body()]):
     require_auth(request)
     message = str(payload.get("message", "")).strip()
     if not message:
@@ -504,7 +506,7 @@ async def api_list_conversations(request: Request):
 
 
 @app.post("/api/conversations")
-async def api_create_conversation(request: Request, payload: dict = Body(default={})):
+async def api_create_conversation(request: Request, payload: Annotated[dict, Body(default_factory=dict)]):
     require_auth(request)
     cid = str(payload.get("id") or secrets.token_hex(8))
     title = str(payload.get("title", "新对话")).strip() or "新对话"
@@ -532,7 +534,7 @@ async def api_get_conversation(cid: str, request: Request):
 
 
 @app.put("/api/conversations/{cid}")
-async def api_update_conversation(cid: str, request: Request, payload: dict = Body(...)):
+async def api_update_conversation(cid: str, request: Request, payload: Annotated[dict, Body()]):
     require_auth(request)
     path = _conv_path(cid)
     if not path.exists():
