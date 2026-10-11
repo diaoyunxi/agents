@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import threading
 import time
@@ -22,8 +23,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 6573, "workspace": "."},
     "auth": {
         "enabled": True,
-        "username": "root",
-        "password": "root",
+        "username": "admin",
+        "password": "",  # 首次启动时自动生成随机密码，不再硬编码默认凭据
         "setup_done": False,
     },
     "ai": {
@@ -94,6 +95,21 @@ def _backup() -> None:
             old.unlink(missing_ok=True)
     except Exception:  # noqa: BLE001
         pass
+
+
+def ensure_credentials() -> dict[str, Any]:
+    """确保持久化配置中存在有效的认证凭据。
+
+    若 config.json 不存在或 auth.password 为空，则自动生成随机密码并落盘，
+    避免使用硬编码默认凭据带来的安全风险。
+    """
+
+    cfg = load()
+    auth = cfg.get("auth", {})
+    if not auth.get("password"):
+        generated = secrets.token_urlsafe(16)
+        cfg = update(lambda c: c.setdefault("auth", {}).update({"password": generated}) or None)
+    return cfg
 
 
 def load(force: bool = False) -> dict[str, Any]:
