@@ -51,6 +51,7 @@ def _git(args: list[str], timeout: float = 30.0, cwd: Path | None = None) -> tup
     try:
         proc = subprocess.run(
             ["git", *args],
+            check=False,
             cwd=str(cwd or BASE_DIR),
             capture_output=True,
             timeout=timeout,
