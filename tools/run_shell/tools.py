@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -41,9 +42,10 @@ def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
 
     timeout = max(5, min(int(timeout or 120), 600))
     try:
+        cmd_parts = shlex.split(command)
         proc = subprocess.run(
-            command,
-            shell=True,
+            cmd_parts,
+            shell=False,
             cwd=str(work_dir),
             capture_output=True,
             text=True,
