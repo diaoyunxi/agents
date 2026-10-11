@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents · 设置</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>.page { max-width: 940px; margin: 0 auto; padding: 22px 18px 60px; }</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">⚙️ Agents 设置</div>
+  <div class="grow"></div>
+  <span class="hint" id="saveState">配置保存在 config.json</span>
+  <a class="hint" href="/chat">返回对话</a>
+  <button class="ghost" id="logout">退出</button>
+</div>
+
+<div class="page">
+  <div class="tabs" id="tabs">
+    <button class="on" data-tab="providers">AI 提供商</button>
+    <button data-tab="model">模型与默认</button>
+    <button data-tab="tools">工具与限制</button>
+    <button data-tab="mcp">MCP 服务器</button>
+    <button data-tab="prompt">技能与提示词</button>
+    <button data-tab="account">账号</button>
+  </div>
+
+  <div id="panel-providers">
+    <div class="card">
+      <h3>新增 / 编辑提供商</h3>
+      <div class="row">
+        <label><span>名称</span><input id="fName" placeholder="DeepSeek"></label>
+        <label><span>Base URL</span><input id="fBase" placeholder="https://api.deepseek.com/v1"></label>
+      </div>
+      <label><span>API Key</span><input id="fKey" type="password" placeholder="sk-..."></label>
+      <label><span>自定义请求头（JSON，可选）</span><input id="fHeaders" placeholder='{"HTTP-Referer":"agents"}'></label>
+      <input id="fId" type="hidden">
+      <div class="nav-row">
+        <button class="ghost" id="resetForm">清空</button>
+        <div style="display:flex;gap:8px">
+          <button id="testBtn">测试连通性</button>
+          <button class="primary" id="saveProvider">保存</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>已配置 <span class="badge" id="provCount">0</span></h3>
+      <div id="provList"></div>
+    </div>
+  </div>
+
+  <div id="panel-model" style="display:none">
+    <div class="card">
+      <h3>获取可用模型</h3>
+      <div class="row">
+        <label><span>选择提供商</span><select id="mProv"></select></label>
+        <label style="flex:0 0 auto;display:flex;align-items:flex-end"><button id="fetchModels">获取模型列表</button></label>
+      </div>
+      <label><span>默认模型（可搜索）</span><input id="mSearch" placeholder="输入关键字过滤"></label>
+      <div class="model-list" id="mList"><div class="empty">点击「获取模型列表」加载</div></div>
+      <div class="nav-row" style="margin-top:12px">
+        <span class="hint" id="mHint"></span>
+        <button class="primary" id="saveModel">设为默认模型</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>生成参数</h3>
+      <div class="row">
+        <label><span>max_tokens</span><input id="pMaxTokens" type="number"></label>
+        <label><span>temperature</span><input id="pTemp" type="number" step="0.1"></label>
+        <label><span>超时（秒）</span><input id="pTimeout" type="number"></label>
+      </div>
+      <button class="primary" id="saveParams">保存参数</button>
+    </div>
+  </div>
+
+  <div id="panel-tools" style="display:none">
+    <div class="card">
+      <h3>工具调用限制</h3>
+      <div class="row">
+        <label><span>启用限制</span><select id="tEnabled"><option value="1">启用</option><option value="0">关闭</option></select></label>
+        <label><span>单轮最多调用</span><input id="tRound" type="number"></label>
+        <label><span>会话最多调用</span><input id="tTotal" type="number"></label>
+        <label><span>最大交互轮数</span><input id="tRounds" type="number"></label>
+      </div>
+      <label><span>允许列表（留空=全部允许，逗号分隔）</span><input id="tAllowed"></label>
+      <label><span>禁用列表（逗号分隔）</span><input id="tDenied"></label>
+      <label><span>需确认列表（逗号分隔）</span><input id="tConfirm"></label>
+      <button class="primary" id="saveLimits">保存限制</button>
+    </div>
+    <div class="card">
+      <h3>已加载工具 <span class="badge" id="toolCount">0</span></h3>
+      <div class="nav-row" style="margin-bottom:12px"><span class="hint">工具来自 tools/ 目录，每个工具一个文件夹</span><button id="reloadTools">重新扫描</button></div>
+      <div id="toolList"></div>
+    </div>
+  </div>
+
+  <div id="panel-mcp" style="display:none">
+    <div class="card">
+      <h3>新增 MCP 服务器</h3>
+      <div class="row">
+        <label><span>名称</span><input id="sName" placeholder="filesystem"></label>
+        <label><span>命令</span><input id="sCmd" placeholder="npx"></label>
+        <label><span>参数（JSON 数组）</span><input id="sArgs" placeholder='["-y","@modelcontextprotocol/server-filesystem","."]'></label>
+      </div>
+      <label><span>环境变量（JSON，可选）</span><input id="sEnv" placeholder='{"KEY":"value"}'></label>
+      <label><span>工作目录（可选）</span><input id="sCwd" placeholder="留空使用工作区"></label>
+      <div class="nav-row">
+        <button class="ghost" id="clearServer">清空</button>
+        <div style="display:flex;gap:8px">
+          <button id="refreshMcp">刷新连接</button>
+          <button class="primary" id="saveServer">保存</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>已配置服务器</h3>
+      <div id="mcpList"></div>
+    </div>
+  </div>
+
+  <div id="panel-prompt" style="display:none">
+    <div class="card">
+      <h3>技能（skills/ 目录，一个技能一个 md 文件）</h3>
+      <div id="skillList"></div>
+    </div>
+    <div class="card">
+      <h3>System 提示词预览</h3>
+      <div class="nav-row" style="margin-bottom:10px">
+        <span class="hint" id="promptInfo"></span>
+        <button id="refreshPrompt">重新生成</button>
+      </div>
+      <textarea id="promptBox" style="height:420px;font-family:var(--mono);font-size:12px" readonly></textarea>
+    </div>
+  </div>
+
+  <div id="panel-account" style="display:none">
+    <div class="card">
+      <h3>修改密码</h3>
+      <div class="row">
+        <label><span>原密码</span><input id="oldPass" type="password"></label>
+        <label><span>新密码</span><input id="newPass" type="password"></label>
+      </div>
+      <button class="primary" id="savePass">保存</button>
+      <div class="hint">用户名默认 root，可在 config.json 的 auth 段修改。</div>
+    </div>
+    <div class="card">
+      <h3>服务信息</h3>
+      <div id="sysInfo" class="hint"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/settings.js"></script>
+</body>
+</html>
+

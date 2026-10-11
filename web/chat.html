@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents · 对话</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">🤖 Agents</div>
+  <select id="providerSel" title="AI 提供商"></select>
+  <select id="modelSel" title="模型"></select>
+  <button class="ghost" id="reloadModels" title="重新获取模型列表">↻</button>
+  <div class="grow"></div>
+  <span id="status" class="hint"></span>
+  <button class="ghost" id="toggleSide">文件变更 <span class="badge" id="changeCount">0</span></button>
+  <a class="hint" href="/settings">设置</a>
+  <button class="ghost" id="logout">退出</button>
+</div>
+
+<div class="wrap">
+  <div class="main">
+    <div class="messages" id="messages">
+      <div class="msg">
+        <div class="who">👋 欢迎</div>
+        <div class="md">
+          <p>直接描述你的需求，我会调用工作区里的工具来完成任务。</p>
+          <ul>
+            <li>左侧中间会显示我的思考、正文输出与工具调用全过程（支持 Markdown）。</li>
+            <li>右侧栏会实时汇总我对你文件的所有改动。</li>
+            <li>工具定义在 <code>tools/</code>，技能在 <code>skills/</code>，均可自行扩展。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="box">
+        <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        <button class="primary" id="send">发送</button>
+        <button class="ghost" id="stop" style="display:none">停止</button>
+      </div>
+      <div class="chips" id="chips">
+        <span class="chip" data-p="列出工作区的目录结构">看看工作区结构</span>
+        <span class="chip" data-p="介绍一下你现在能用哪些工具">我有哪些工具</span>
+        <span class="chip" data-p="读一下 README 或项目入口文件并总结">总结项目</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="side" id="side">
+    <div class="side-head">
+      <b>文件变更</b>
+      <span class="badge" id="sideCount">0</span>
+      <div class="grow" style="flex:1"></div>
+      <button class="ghost" id="clearChanges">清空</button>
+    </div>
+    <div class="side-body" id="changes">
+      <div class="empty">本次会话中 AI 对文件的改动会显示在这里</div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/chat.js"></script>
+</body>
+</html>
+

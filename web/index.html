@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents · 登录与新手引导</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div class="center-page">
+
+  <!-- 登录 -->
+  <div class="card auth-card" id="loginCard" style="display:none">
+    <div class="logo">🤖 <span>Agents</span></div>
+    <div class="sub">本地智能体 · 工作区助手</div>
+    <label><span>用户名</span><input id="loginUser" autocomplete="username" value="root"></label>
+    <label><span>密码</span><input id="loginPass" type="password" autocomplete="current-password" placeholder="默认 root"></label>
+    <button class="primary" style="width:100%" id="loginBtn">登录</button>
+    <div class="hint" style="text-align:center;margin-top:12px">默认账号 root / root，可在设置页修改</div>
+  </div>
+
+  <!-- 新手引导 -->
+  <div class="card wizard" id="wizardCard" style="display:none">
+    <div class="logo" style="font-size:20px">🚀 <span>新手引导</span></div>
+    <div class="sub" style="margin-bottom:14px">四步完成 AI 配置，马上开始对话</div>
+    <div class="steps" id="steps">
+      <div class="on"></div><div></div><div></div><div></div><div></div>
+    </div>
+
+    <!-- 第 1 步：Base URL -->
+    <div class="step" data-step="0">
+      <div class="step-title">1. 配置 AI 的 Base URL</div>
+      <div class="step-desc">填写你使用的 AI 服务商接口地址（OpenAI 兼容）。只填到域名即可，程序会自动补 /v1。</div>
+      <div class="row">
+        <label><span>服务商名称</span><input id="pName" placeholder="例如 OpenAI / DeepSeek / 本地 Ollama"></label>
+        <label style="flex:2"><span>Base URL</span><input id="pBase" placeholder="https://api.openai.com/v1"></label>
+      </div>
+      <div class="hint">常见示例：OpenAI <code>https://api.openai.com/v1</code>、DeepSeek <code>https://api.deepseek.com/v1</code>、本地 Ollama <code>http://127.0.0.1:11434/v1</code></div>
+    </div>
+
+    <!-- 第 2 步：API Key -->
+    <div class="step" data-step="1" style="display:none">
+      <div class="step-title">2. 填写 API Key</div>
+      <div class="step-desc">Key 只保存在本机 config.json，不会发送给除该服务商之外的任何地址。</div>
+      <label><span>API Key</span><input id="pKey" type="password" placeholder="sk-..."></label>
+      <label><span>自定义请求头（可选，JSON）</span><input id="pHeaders" placeholder='{"X-App":"agents"}'></label>
+    </div>
+
+    <!-- 第 3 步：获取模型 -->
+    <div class="step" data-step="2" style="display:none">
+      <div class="step-title">3. 自动获取可用模型</div>
+      <div class="step-desc">保存后调用 /models 接口拉取模型列表。</div>
+      <div id="modelInfo" class="hint">尚未获取</div>
+    </div>
+
+    <!-- 第 4 步：选择默认模型 -->
+    <div class="step" data-step="3" style="display:none">
+      <div class="step-title">4. 选择默认模型</div>
+      <div class="step-desc">勾选一个作为默认模型，对话页可随时切换。</div>
+      <div class="model-list" id="modelList"><div class="empty">暂无模型，请先点击上一步的「获取模型」</div></div>
+    </div>
+
+    <!-- 第 5 步：工具调用限制 -->
+    <div class="step" data-step="4" style="display:none">
+      <div class="step-title">5. 工具调用限制</div>
+      <div class="step-desc">用于控制 Agent 每轮 / 整个会话能调用多少次工具，防止失控循环。</div>
+      <div class="row">
+        <label><span>启用限制</span><select id="limEnabled"><option value="1">启用</option><option value="0">关闭</option></select></label>
+        <label><span>单轮最多调用</span><input id="limRound" type="number" value="10" min="1"></label>
+      </div>
+      <div class="row">
+        <label><span>会话最多调用</span><input id="limTotal" type="number" value="60" min="1"></label>
+        <label><span>最大交互轮数</span><input id="limRounds" type="number" value="25" min="1"></label>
+      </div>
+      <label><span>禁用工具（逗号分隔，留空表示不限制）</span><input id="limDenied" placeholder="run_shell"></label>
+      <div class="hint">内置工具在 tools/ 目录，每个工具一个文件夹，含 tools.py 与 tools.md；技能在 skills/ 目录，一个技能一个 md。它们都会自动嵌入系统提示词。</div>
+    </div>
+
+    <div class="nav-row">
+      <button class="ghost" id="prevBtn" style="visibility:hidden">上一步</button>
+      <div style="display:flex;gap:8px">
+        <button class="ghost" id="skipBtn">跳过引导，进设置</button>
+        <button class="primary" id="nextBtn">下一步</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/wizard.js"></script>
+</body>
+</html>
