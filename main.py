@@ -10,16 +10,19 @@ import config
 
 
 def main() -> None:
-    cfg = config.load()
+    cfg = config.ensure_credentials()
     server = cfg.get("server", {}) or {}
     host = server.get("host", "127.0.0.1")
     port = int(server.get("port", 6573))
     config.workspace_dir()
     url = "http://{0}:{1}/".format("localhost" if host in ("0.0.0.0", "127.0.0.1") else host, port)
+    auth = cfg.get("auth", {})
     print("=" * 62)
     print(" Agents 已启动: " + url)
     print(" 工作区: " + str(config.workspace_dir()))
-    print(" 默认账号: " + str(cfg.get("auth", {}).get("username", "root")) + " / " + str(cfg.get("auth", {}).get("password", "root")))
+    if not auth.get("setup_done"):
+        print(" 初始账号: " + str(auth.get("username", "admin")) + " / " + str(auth.get("password", "(已自动生成)")))
+        print(" 请尽快在设置页面中修改默认密码！")
     print("=" * 62)
     try:
         webbrowser.open(url)
