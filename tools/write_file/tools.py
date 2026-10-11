@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from common import SandboxError, read_text, record_change, relative, resolve_path
+from common import read_text, record_change, relative, resolve_path
 
 NAME = "write_file"
 DESCRIPTION = "创建新文件或整体覆盖已有文件，变更会记录到右侧文件变更面板"
