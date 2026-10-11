@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -40,19 +42,36 @@ def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
         raise SandboxError(f"工作目录 {work_dir} 超出工作区") from exc
 
     timeout = max(5, min(int(timeout or 120), 600))
+
+    # 使用 shlex.split() 解析命令参数，shell=False 防止命令注入 (CWE-78)
+    try:
+        args = shlex.split(command)
+    except ValueError as exc:
+        return {"ok": False, "output": f"命令解析失败: {exc}"}
+    if not args:
+        return {"ok": False, "output": "命令为空"}
+
+    # 安全的环境变量白名单，避免泄露敏感信息
+    _SAFE_ENV_KEYS = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "PWD", "TMPDIR"}
+    safe_env = {k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS}
+    safe_env["TERM"] = "dumb"
+
     try:
         proc = subprocess.run(
-            command,
-            shell=True,
+            args,
+            shell=False,
             cwd=str(work_dir),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            env=safe_env,
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "output": f"命令超时（>{timeout}s）被终止"}
+    except FileNotFoundError:
+        return {"ok": False, "output": f"命令未找到: {args[0]}"}
 
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
