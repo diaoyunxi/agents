@@ -302,4 +302,4 @@ def _require_snapshot(U, app: str | None):
     return snap
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS", "DANGEROUS"]
+__all__ = ["DANGEROUS", "DESCRIPTION", "NAME", "PARAMETERS", "run"]

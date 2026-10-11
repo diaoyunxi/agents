@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from common import SandboxError, read_text, relative, resolve_path
+from common import read_text, relative, resolve_path
 
 NAME = "read_file"
 DESCRIPTION = "读取工作区中某个文件（或目录列表）的文本内容"
@@ -38,4 +38,4 @@ def run(path: str, start_line: int | None = None, end_line: int | None = None, m
     return {"output": f"{header}\n{body}"}
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]

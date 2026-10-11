@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
-from pathlib import Path
 
 from common import SandboxError, workspace_dir
 
@@ -64,4 +62,4 @@ def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
     return {"ok": proc.returncode == 0, "output": "\n".join(parts)}
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]

@@ -109,4 +109,4 @@ def difflib_close(needle: str, lines: list[str]):
     return best if best_ratio >= 0.85 else None
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]

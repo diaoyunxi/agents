@@ -108,12 +108,12 @@ def _uia():
         try:
             comtypes.client.GetModule("UIAutomationCore.dll")
             from comtypes.gen import UIAutomationClient as UIA
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise UIError("unsupported", f"无法加载 UI Automation 类型库: {exc}") from exc
 
     try:
         instance = comtypes.client.CreateObject(UIA.CUIAutomation, interface=UIA.IUIAutomation)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise UIError("unsupported", f"无法创建 UIAutomation 对象: {exc}") from exc
     _ensure_dpi()
     _local.uia = (UIA, instance)
@@ -182,11 +182,11 @@ class Node:
     automation_id: str = ""
     offscreen: bool = False
     ref: str = ""
-    children: list["Node"] = field(default_factory=list)
+    children: list[Node] = field(default_factory=list)
     handle: Any = None
 
     @property
-    def anchor(self) -> "Anchor":
+    def anchor(self) -> Anchor:
         return Anchor(
             role=self.role, name=self.name, automation_id=self.automation_id,
             bounds=self.bounds,
@@ -337,7 +337,7 @@ def _exe_for_pid(pid: int) -> str | None:
 def list_windows() -> list[dict[str, Any]]:
     """枚举顶层窗口：标题、类名、进程、可执行名。"""
 
-    UIA, uia = _uia()
+    _UIA, uia = _uia()
     walker = uia.RawViewWalker
     root = uia.GetRootElement()
     out: list[dict[str, Any]] = []
@@ -365,8 +365,8 @@ def find_window(app: str):
     needle = (app or "").strip().lower()
     if not needle:
         return None
-    needle_stem = needle[:-4] if needle.endswith(".exe") else needle
-    UIA, uia = _uia()
+    needle_stem = needle.removesuffix(".exe")
+    _UIA, uia = _uia()
     walker = uia.RawViewWalker
     root = uia.GetRootElement()
     best_el, best_score = None, 0
@@ -376,7 +376,7 @@ def find_window(app: str):
         cls = (_safe(lambda: el.CurrentClassName, "") or "").lower()
         pid = int(_safe(lambda: el.CurrentProcessId, 0) or 0)
         exe = (_exe_for_pid(pid) or "").lower()
-        stem = exe[:-4] if exe.endswith(".exe") else exe
+        stem = exe.removesuffix(".exe")
         score = 0
         if stem and (stem == needle or stem == needle_stem):
             score = 100

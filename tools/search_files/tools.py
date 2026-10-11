@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import fnmatch
 import re
 from pathlib import Path
 
-from common import relative, resolve_path, workspace_dir, read_text
+from common import read_text, relative, resolve_path, workspace_dir
 
 NAME = "search_files"
 DESCRIPTION = "在工作区内按文件名或文件内容进行搜索，返回匹配的文件与行"
@@ -71,10 +70,10 @@ def run(pattern: str, path: str = ".", glob: str | None = None, regex: bool = Fa
     parts = [f"搜索模式: {pattern} | 范围: {relative(base) or '.'} | 忽略大小写: {ignore_case}"]
     if name_hits:
         parts.append("文件名匹配:\n" + "\n".join(name_hits[:20]))
-    parts.append("内容匹配:" + (f"\n" + "\n".join(hits) if hits else " 无"))
+    parts.append("内容匹配:" + ("\n" + "\n".join(hits) if hits else " 无"))
     if len(hits) >= max_results:
         parts.append(f"... 结果已达上限 {max_results}，请缩小范围或调整关键词")
     return {"output": "\n".join(parts)}
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]

@@ -12,7 +12,7 @@ _lock = asyncio.Lock()
 
 
 def _server_id(cfg: dict) -> str:
-    return cfg.get("id") or "{0}::{1}".format(cfg.get("name", "mcp"), cfg.get("command", ""))
+    return cfg.get("id") or "{}::{}".format(cfg.get("name", "mcp"), cfg.get("command", ""))
 
 
 def _enabled_servers() -> list:
@@ -81,17 +81,17 @@ def schema_to_doc(name: str, description: str, schema: dict) -> str:
     for key, spec in props.items():
         typ = spec.get("type", "string")
         if typ == "array" and isinstance(spec.get("items"), dict):
-            typ = "array<{0}>".format(spec["items"].get("type", "string"))
+            typ = "array<{}>".format(spec["items"].get("type", "string"))
         flag = "必填" if key in required else "可选"
         desc = spec.get("description") or spec.get("title") or ""
         if spec.get("enum"):
             desc = (desc + " 可选值: " + ", ".join(str(e) for e in spec["enum"])).strip()
-        lines.append("- {0} ({1}, {2}): {3}".format(key, typ, flag, desc))
+        lines.append(f"- {key} ({typ}, {flag}): {desc}")
     return "\n".join(lines)
 
 
 def prefixed(server_name: str, tool_name: str) -> str:
-    return "mcp__{0}__{1}".format(server_name, tool_name)
+    return f"mcp__{server_name}__{tool_name}"
 
 
 async def list_all_tools() -> list:
@@ -158,11 +158,11 @@ async def refresh_prompt() -> str:
         _prompt_cache.update({"text": "", "stamp": time.time()})
         return ""
     chunks = [
-        "# MCP 工具\n\n以下工具由外部 MCP 服务器提供，调用方式与内置工具完全相同。\n"
-        "工具名格式为 mcp__服务器名__工具名，例如 mcp__filesystem__read_file。"
+        ("# MCP 工具\n\n以下工具由外部 MCP 服务器提供，调用方式与内置工具完全相同。\n"
+        "工具名格式为 mcp__服务器名__工具名，例如 mcp__filesystem__read_file。")
     ]
     for tool in tools:
-        head = "### 工具 `{0}` —— 来自 MCP 服务器 `{1}`".format(tool["name"], tool["mcp_server"])
+        head = "### 工具 `{}` —— 来自 MCP 服务器 `{}`".format(tool["name"], tool["mcp_server"])
         chunks.append(head + "\n" + tool["doc"])
     text = "\n\n".join(chunks)
     _prompt_cache.update({"text": text, "stamp": time.time()})

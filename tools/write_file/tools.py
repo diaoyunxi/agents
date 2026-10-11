@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from common import SandboxError, read_text, record_change, relative, resolve_path
+from common import read_text, record_change, relative, resolve_path
 
 NAME = "write_file"
 DESCRIPTION = "创建新文件或整体覆盖已有文件，变更会记录到右侧文件变更面板"
@@ -36,4 +36,4 @@ def run(path: str, content: str, overwrite: bool = False) -> dict:
     return {"output": f"{action}文件 {relative(target)}（{lines} 行, {len(text)} 字符）"}
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]

@@ -28,8 +28,8 @@ IDLE_PUSH_LIMIT = 3
 IDLE_PUSH_TEMPLATE = (
     "（运行时提醒）你这一轮没有调用任何工具，任务尚未被标记为结束。\n"
     "请继续推进：如果还有工作没做，就调用相应工具去做；如果确实已经完成，"
-    "请调用工具 `{stop}` 来显式结束（可带参数 reason 说明理由）。"
-).format(stop=STOP_TOOL)
+    f"请调用工具 `{STOP_TOOL}` 来显式结束（可带参数 reason 说明理由）。"
+)
 IDLE_GIVE_UP = "已连续 {0} 轮未调用任何工具，本次任务到此结束。"
 
 def resolve_provider(provider_id: str = "", model: str = "") -> tuple:
@@ -57,10 +57,10 @@ def _check_allowed(name: str, limits: dict) -> str:
         return ""
     allowed = limits.get("allowed_tools") or []
     if allowed and name not in allowed:
-        return "工具 `{0}` 不在允许列表中（允许: {1}）".format(name, ", ".join(allowed))
+        return "工具 `{}` 不在允许列表中（允许: {}）".format(name, ", ".join(allowed))
     denied = limits.get("denied_tools") or []
     if name in denied:
-        return "工具 `{0}` 已被禁用".format(name)
+        return f"工具 `{name}` 已被禁用"
     return ""
 
 
@@ -90,15 +90,15 @@ def _format_results(results: list) -> str:
         if item.get("parse_error"):
             has_parse_error = True
             flag = "未执行（JSON 解析失败）"
-        lines.append("- 工具 `{0}`：{1}".format(item["tool"], flag))
-        lines.append("  参数: {0}".format(json.dumps(item.get("arguments", {}), ensure_ascii=False)[:500]))
-        lines.append("  输出: {0}".format(str(item.get("output", ""))[:6000]))
+        lines.append("- 工具 `{}`：{}".format(item["tool"], flag))
+        lines.append("  参数: {}".format(json.dumps(item.get("arguments", {}), ensure_ascii=False)[:500]))
+        lines.append("  输出: {}".format(str(item.get("output", ""))[:6000]))
     if has_parse_error:
         lines.append("注意：上述工具调用因为 JSON 不合法而**没有被执行**，请修正格式后重发。")
         lines.append(PARSE_ERROR_GUIDE)
     lines.append("请根据以上结果决定下一步（继续调用工具，或给出最终答复）。")
     if any(item.get("stop_task") for item in results):
-        lines.append("你已调用 `{0}`，本轮交互到此结束，不会再回灌新的指令。".format(STOP_TOOL))
+        lines.append(f"你已调用 `{STOP_TOOL}`，本轮交互到此结束，不会再回灌新的指令。")
     return "\n".join(lines)
 
 
@@ -197,7 +197,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 except (json.JSONDecodeError, ValueError):
                     args = {"__raw__": raw_args}
                 native_calls.append({
-                    "id": tc.get("id") or "call_{0}".format(uuid.uuid4().hex[:12]),
+                    "id": tc.get("id") or f"call_{uuid.uuid4().hex[:12]}",
                     "name": name,
                     "arguments": args,
                     "raw_args": raw_args,
@@ -245,12 +245,12 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                     is_stop = name == STOP_TOOL
                     if not is_stop:
                         if total_calls >= max_total:
-                            msg = "已达到本会话工具调用总上限 {0} 次，停止调用并给出总结。".format(max_total)
+                            msg = f"已达到本会话工具调用总上限 {max_total} 次，停止调用并给出总结。"
                             tool_messages.append({"role": "tool", "tool_call_id": nc["id"], "content": msg})
                             yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
                             continue
                         if round_calls >= max_per_round:
-                            msg = "本轮工具调用次数已达上限 {0} 次。".format(max_per_round)
+                            msg = f"本轮工具调用次数已达上限 {max_per_round} 次。"
                             tool_messages.append({"role": "tool", "tool_call_id": nc["id"], "content": msg})
                             yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
                             continue
@@ -309,7 +309,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
             # 形似工具调用但 JSON 非法：回灌错误，让模型修正后重试
             for seg in broken:
                 name = seg.get("tool") or "(未识别)"
-                output = "{0}\n\n{1}".format(seg["error"], PARSE_ERROR_GUIDE)
+                output = "{}\n\n{}".format(seg["error"], PARSE_ERROR_GUIDE)
                 results.append({"tool": name, "arguments": {}, "ok": False,
                                 "output": output, "parse_error": True})
                 yield {"event": "tool_start", "tool": name, "arguments": {},
@@ -322,7 +322,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
             parse_streak = parse_streak + 1 if (broken and not inline_calls) else 0
             if parse_streak >= PARSE_RETRY_LIMIT:
                 yield {"event": "limit",
-                       "message": "连续 {0} 轮工具调用 JSON 无法解析，已停止本轮，请检查模型输出格式。".format(parse_streak)}
+                       "message": f"连续 {parse_streak} 轮工具调用 JSON 无法解析，已停止本轮，请检查模型输出格式。"}
                 stop_reason = "parse_failed"
                 break
 
@@ -339,12 +339,12 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 is_stop = name == STOP_TOOL
                 if not is_stop:
                     if total_calls >= max_total:
-                        msg = "已达到本会话工具调用总上限 {0} 次，停止调用并给出总结。".format(max_total)
+                        msg = f"已达到本会话工具调用总上限 {max_total} 次，停止调用并给出总结。"
                         results.append({"tool": name, "arguments": args, "ok": False, "output": msg})
                         yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
                         continue
                     if round_calls >= max_per_round:
-                        msg = "本轮工具调用次数已达上限 {0} 次。".format(max_per_round)
+                        msg = f"本轮工具调用次数已达上限 {max_per_round} 次。"
                         results.append({"tool": name, "arguments": args, "ok": False, "output": msg})
                         yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
                         continue
@@ -356,7 +356,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 outcome["tool"] = name
                 outcome["arguments"] = args
                 if call.get("repaired"):
-                    outcome["output"] = "（你输出的 JSON 格式有误，已自动修复后执行；下次请严格合法）\n{0}".format(
+                    outcome["output"] = "（你输出的 JSON 格式有误，已自动修复后执行；下次请严格合法）\n{}".format(
                         outcome.get("output", ""))
                 results.append(outcome)
                 yield {
@@ -381,7 +381,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 break
         else:
             stop_reason = "max_rounds"
-            yield {"event": "limit", "message": "已达到最大交互轮数 {0}，请让用户继续追问。".format(max_rounds)}
+            yield {"event": "limit", "message": f"已达到最大交互轮数 {max_rounds}，请让用户继续追问。"}
 
     yield {
         "event": "end",
