@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # 控制信号：模型调用它即表示任务结束。在 function calling 范式下它本身也是一个函数，
 # 运行时仍按 stop_task 标记识别并停止后续交互。
 STOP_FUNCTION: dict[str, Any] = {

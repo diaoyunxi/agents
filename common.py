@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import difflib
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Self
 
 from config import workspace_dir
 
@@ -100,11 +101,11 @@ class ChangeCollector:
         self.changes: list[FileChange] = []
         self._token = None
 
-    def __enter__(self) -> "ChangeCollector":
+    def __enter__(self) -> Self:
         self._token = _current_changes.set(self.changes)
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         if self._token is not None:
             _current_changes.reset(self._token)
 

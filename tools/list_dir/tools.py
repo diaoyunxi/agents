@@ -28,7 +28,7 @@ def run(path: str = ".", recursive: bool = False, extension: str | None = None, 
         return {"ok": False, "output": f"目录不存在: {relative(target)}"}
 
     root = workspace_dir().resolve()
-    pattern = f"**/*" if recursive else "*"
+    pattern = "**/*" if recursive else "*"
     entries = []
     for item in sorted(target.glob(pattern)):
         if any(part in SKIP_DIRS for part in item.parts):
@@ -58,4 +58,4 @@ def run(path: str = ".", recursive: bool = False, extension: str | None = None, 
     return {"output": "\n".join(lines)}
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]

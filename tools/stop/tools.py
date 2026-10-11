@@ -31,4 +31,4 @@ def run(reason: str | None = None) -> dict[str, Any]:
     }
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]

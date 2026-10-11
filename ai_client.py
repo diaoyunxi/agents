@@ -73,7 +73,7 @@ async def fetch_models(provider):
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url, headers=_headers(provider))
         if resp.status_code >= 400:
-            raise ValueError("获取模型失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:300]))
+            raise ValueError(f"获取模型失败 HTTP {resp.status_code}: {resp.text[:300]}")
         data = resp.json()
     items = data.get("data") if isinstance(data, dict) else data
     models = []
@@ -148,7 +148,7 @@ async def stream_chat(provider, model, messages, tools=None):
         async with client.stream("POST", url, headers=_headers(provider), json=payload) as resp:
             if resp.status_code >= 400:
                 body = (await resp.aread()).decode("utf-8", errors="replace")
-                raise ValueError("模型请求失败 HTTP {0}: {1}".format(resp.status_code, body[:500]))
+                raise ValueError(f"模型请求失败 HTTP {resp.status_code}: {body[:500]}")
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -162,7 +162,7 @@ async def stream_chat(provider, model, messages, tools=None):
                 except json.JSONDecodeError:
                     continue
                 if data.get("error"):
-                    raise ValueError("模型返回错误: {0}".format(json.dumps(data["error"], ensure_ascii=False)[:400]))
+                    raise ValueError("模型返回错误: {}".format(json.dumps(data["error"], ensure_ascii=False)[:400]))
                 content, reasoning, tcs = _extract_delta(data)
                 for tc in tcs:
                     _merge_tool_call(tool_calls, tc)
@@ -186,7 +186,7 @@ async def chat(provider, model, messages, tools=None):
     async with httpx.AsyncClient(timeout=_timeout()) as client:
         resp = await client.post(url, headers=_headers(provider), json=payload)
         if resp.status_code >= 400:
-            raise ValueError("模型请求失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:500]))
+            raise ValueError(f"模型请求失败 HTTP {resp.status_code}: {resp.text[:500]}")
         data = resp.json()
     choices = data.get("choices") or []
     if not choices:

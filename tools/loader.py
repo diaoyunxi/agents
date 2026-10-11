@@ -14,8 +14,9 @@ import importlib.util
 import inspect
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from config import tools_dir
 

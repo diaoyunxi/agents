@@ -11,10 +11,11 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -70,7 +71,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def _notify(config: dict[str, Any]) -> None:
-    for cb in list(_listeners):
+    for cb in _listeners:
         try:
             cb(config)
         except Exception as exc:  # noqa: BLE001
@@ -253,7 +254,7 @@ def public_config(include_secrets: bool = False) -> dict[str, Any]:
                 provider["has_api_key"] = True
     for server in config.get("mcp_servers", []):
         server.pop("env", None)
-        for item in server.get("headers", {}).keys():
+        for item in server.get("headers", {}):
             server["headers"][item] = "***"
     config["auth"].pop("password", None)
     return config

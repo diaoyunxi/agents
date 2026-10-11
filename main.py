@@ -16,7 +16,7 @@ def main() -> None:
     host = server.get("host", "127.0.0.1")
     port = int(server.get("port", 6573))
     config.workspace_dir()
-    url = "http://{0}:{1}/".format("localhost" if host in ("0.0.0.0", "127.0.0.1") else host, port)
+    url = "http://{}:{}/".format("localhost" if host in ("0.0.0.0", "127.0.0.1") else host, port)
     print("=" * 62)
     print(" Agents 已启动: " + url)
     print(" 工作区: " + str(config.workspace_dir()))

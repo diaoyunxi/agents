@@ -101,7 +101,7 @@ def _wait_pid_exit(pid: int, timeout: float, log_path: Path) -> bool:
         if not _pid_alive(pid):
             return True
         time.sleep(0.25)
-    _log(log_path, "等待 PID {} 退出超时".format(pid))
+    _log(log_path, f"等待 PID {pid} 退出超时")
     return not _pid_alive(pid)
 
 
@@ -115,7 +115,7 @@ def _run(cmd: list[str], cwd: Path, timeout: float) -> tuple[int, str]:
         proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True,
                               timeout=timeout, env=env)
     except FileNotFoundError:
-        return -1, "未找到命令：{}".format(cmd[0])
+        return -1, f"未找到命令：{cmd[0]}"
     except subprocess.TimeoutExpired:
         return -2, "命令超时：{}".format(" ".join(cmd))
     out = proc.stdout.decode("utf-8", "replace").strip()
@@ -155,7 +155,7 @@ def _update_code(cwd: Path, log_path: Path) -> tuple[bool, str]:
 
 
 def _wait_http(port: int, timeout: float) -> bool:
-    url = "http://127.0.0.1:{}/api/health".format(port)
+    url = f"http://127.0.0.1:{port}/api/health"
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -172,7 +172,7 @@ def _wait_http(port: int, timeout: float) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def _launch(cwd: Path, log_path: Path) -> "subprocess.Popen[bytes]":
+def _launch(cwd: Path, log_path: Path) -> subprocess.Popen[bytes]:
     """拉起新的 Web 服务进程（同样以分离方式，确保其不受本进程退出影响）。"""
     env = dict(os.environ)
     env["AGENTS_NO_BROWSER"] = "1"       # 重启时不要再自动弹出浏览器
@@ -203,15 +203,14 @@ def main() -> int:
     log_path = cwd / LOG_NAME
     result_path = cwd / RESULT_NAME
 
-    _log(log_path, "更新器启动 pid={} 待退役进程={} 端口={}".format(
-        os.getpid(), args.pid, args.port))
+    _log(log_path, f"更新器启动 pid={os.getpid()} 待退役进程={args.pid} 端口={args.port}")
 
     # 0. 稍等片刻，让旧服务把「已触发更新」的响应发回浏览器
     time.sleep(max(0.0, args.delay))
 
     # 1. 等旧服务退出，必要时强制结束，确保旧代码与端口都被释放
     if args.pid > 0:
-        _log(log_path, "等待旧服务 PID {} 退出…".format(args.pid))
+        _log(log_path, f"等待旧服务 PID {args.pid} 退出…")
         if not _wait_pid_exit(args.pid, 15, log_path):
             _log(log_path, "旧服务未按时退出，强制结束")
             _kill(args.pid)
@@ -222,20 +221,20 @@ def main() -> int:
     ok, output = _update_code(cwd, log_path)
     after = _short_head(cwd)
     updated = ok and after != before
-    _log(log_path, "拉取结果 ok={} {} -> {}\n{}".format(ok, before, after, output))
+    _log(log_path, f"拉取结果 ok={ok} {before} -> {after}\n{output}")
 
     # 3. 拉起新服务进程，并探活；失败则重试
     restarted = False
     message = ""
     head = _short_head(cwd)
     for attempt in range(1, 4):
-        _log(log_path, "第 {} 次拉起新服务…".format(attempt))
+        _log(log_path, f"第 {attempt} 次拉起新服务…")
         proc = _launch(cwd, log_path)
         if _wait_http(args.port, 30):
             restarted = True
-            _log(log_path, "服务已恢复 (pid={})".format(proc.pid))
+            _log(log_path, f"服务已恢复 (pid={proc.pid})")
             break
-        _log(log_path, "服务未在 30s 内就绪，退出码={}，准备重试".format(proc.poll()))
+        _log(log_path, f"服务未在 30s 内就绪，退出码={proc.poll()}，准备重试")
 
     if restarted:
         if updated:

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import config
-from tools import loader as tool_loader
 import skill_loader
+from tools import loader as tool_loader
 
 CORE_RULES = """你是一个运行在本地工作区里的智能体 Agent，可以通过调用工具来读写文件、执行命令，真正帮用户完成工作。
 
@@ -36,18 +36,18 @@ def _limits_section() -> str:
     if not limits.get("enabled", True):
         lines.append("- 当前未启用调用限制，可自由调用工具，但仍需注意安全。")
         return "\n".join(lines)
-    lines.append("- 单轮最多调用 {0} 次工具".format(limits.get("max_calls_per_round", 10)))
-    lines.append("- 整个会话最多调用 {0} 次工具".format(limits.get("max_total_calls", 60)))
-    lines.append("- 最多进行 {0} 轮工具交互".format(limits.get("max_rounds", 25)))
+    lines.append("- 单轮最多调用 {} 次工具".format(limits.get("max_calls_per_round", 10)))
+    lines.append("- 整个会话最多调用 {} 次工具".format(limits.get("max_total_calls", 60)))
+    lines.append("- 最多进行 {} 轮工具交互".format(limits.get("max_rounds", 25)))
     allowed = limits.get("allowed_tools") or []
     denied = limits.get("denied_tools") or []
     if allowed:
-        lines.append("- 仅允许调用：{0}".format(", ".join(allowed)))
+        lines.append("- 仅允许调用：{}".format(", ".join(allowed)))
     if denied:
-        lines.append("- 禁止调用：{0}（调用会被拒绝并计入次数）".format(", ".join(denied)))
+        lines.append("- 禁止调用：{}（调用会被拒绝并计入次数）".format(", ".join(denied)))
     confirm = limits.get("require_confirmation") or []
     if confirm:
-        lines.append("- 以下工具需先征得用户确认：{0}".format(", ".join(confirm)))
+        lines.append("- 以下工具需先征得用户确认：{}".format(", ".join(confirm)))
     lines.append("- 工具 `stop` 为结束信号，不受以上允许/禁用列表与次数上限约束，始终可用。")
     return "\n".join(lines)
 
@@ -66,7 +66,7 @@ def build_system_prompt(extra: str = "") -> str:
     from common import workspace_dir
 
     parts = [CORE_RULES]
-    parts.append("# 工作区信息\n- 根目录：{0}\n- 当前时间：{1}".format(
+    parts.append("# 工作区信息\n- 根目录：{}\n- 当前时间：{}".format(
         workspace_dir(), __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
     tool_docs = tool_loader.build_prompt_section()

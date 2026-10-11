@@ -66,7 +66,7 @@ for label, sample in [("裸引号对", full), ("多裸引号", b2), ("多调用"
     segs = tp.parse_segments(sample)
     calls = [s for s in segs if s["type"] == "tool_call"]
     covered = "".join(sample[i] for i, v in enumerate(mask) if v == 1)
-    check("mask 覆盖 == %s 的调用原文" % label, covered == "".join(s["raw"] for s in calls),
+    check(f"mask 覆盖 == {label} 的调用原文", covered == "".join(s["raw"] for s in calls),
           "mask=%d字符 调用原文=%d字符" % (len(covered), len("".join(s["raw"] for s in calls))))
 
 print("### G) 正文散文不受影响")
@@ -82,8 +82,8 @@ t0 = time.time()
 segs = tp.parse_segments(big)
 elapsed = time.time() - t0
 seg = [s for s in segs if s["type"] == "tool_call"]
-check("长文本(%d字符)解析成功" % len(big), len(seg) == 1, "耗时 %.2fs" % elapsed)
-check("长文本性能 < 2s", elapsed < 2.0, "%.2fs" % elapsed)
+check("长文本(%d字符)解析成功" % len(big), len(seg) == 1, f"耗时 {elapsed:.2f}s")
+check("长文本性能 < 2s", elapsed < 2.0, f"{elapsed:.2f}s")
 if seg:
     # 模型输出的是 JSON 转义序列 \n，json.loads 后应为真实换行
     want = "\n".join(['line %d with "quoted" text' % i for i in range(20)])

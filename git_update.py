@@ -79,7 +79,7 @@ def _branch() -> str:
 
 def _remote(branch: str) -> str:
     if branch:
-        code, out, _ = _git(["config", "--get", "branch.{}.remote".format(branch)], timeout=10)
+        code, out, _ = _git(["config", "--get", f"branch.{branch}.remote"], timeout=10)
         if code == 0 and out:
             return out
     code, out, _ = _git(["remote"], timeout=10)
@@ -90,13 +90,13 @@ def _remote(branch: str) -> str:
 
 
 def _upstream(branch: str) -> str:
-    code, out, _ = _git(["rev-parse", "--abbrev-ref", "{}@{{u}}".format(branch)], timeout=10)
+    code, out, _ = _git(["rev-parse", "--abbrev-ref", f"{branch}@{{u}}"], timeout=10)
     return out if code == 0 and out else ""
 
 
 def _fetch(remote: str, branch: str, force: bool = False) -> tuple[bool, str]:
     """拉取远程分支引用。同一分支在 TTL 内复用结果，避免网络风暴。"""
-    key = "{}/{}".format(remote, branch)
+    key = f"{remote}/{branch}"
     now = time.time()
     with _fetch_lock:
         cached = _fetch_cache["data"]
@@ -171,24 +171,24 @@ def info(force_fetch: bool = False) -> dict:
         result["error"] = "获取远程信息失败：" + (fetch_err or "未知错误")
         return result
 
-    upstream = _upstream(branch) or "{}/{}".format(remote, branch)
+    upstream = _upstream(branch) or f"{remote}/{branch}"
     code, remote_head, _ = _git(["rev-parse", "--short", upstream], timeout=10)
     if code != 0:
-        result["error"] = "未找到远程分支 {}".format(upstream)
+        result["error"] = f"未找到远程分支 {upstream}"
         return result
     result["remote_head"] = remote_head
 
-    code, behind, _ = _git(["rev-list", "--count", "HEAD..{}".format(upstream)], timeout=15)
+    code, behind, _ = _git(["rev-list", "--count", f"HEAD..{upstream}"], timeout=15)
     result["behind"] = int(behind) if code == 0 and behind.isdigit() else 0
 
-    code, ahead, _ = _git(["rev-list", "--count", "{}..HEAD".format(upstream)], timeout=15)
+    code, ahead, _ = _git(["rev-list", "--count", f"{upstream}..HEAD"], timeout=15)
     result["ahead"] = int(ahead) if code == 0 and ahead.isdigit() else 0
 
     result["has_update"] = result["behind"] > 0
     if result["has_update"]:
         code, log, _ = _git(
             ["log", "--no-decorate", "--pretty=format:%h|%s|%an|%ar", "-n", "20",
-             "HEAD..{}".format(upstream)],
+             f"HEAD..{upstream}"],
             timeout=15,
         )
         if code == 0 and log:
@@ -265,7 +265,7 @@ def start_update(delay: float = 2.0) -> dict:
     except Exception as exc:  # noqa: BLE001
         _updating = False
         log_handle.close()
-        return {"ok": False, "message": "启动更新进程失败：{}".format(exc)}
+        return {"ok": False, "message": f"启动更新进程失败：{exc}"}
     log_handle.close()
     return {"ok": True, "message": "已启动更新进程", "updater_pid": proc.pid}
 

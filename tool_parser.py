@@ -225,7 +225,7 @@ def _resolve_candidate(text, start, max_retry=BARE_QUOTE_RETRY):
                 obj = json.loads(fixed)
             except (json.JSONDecodeError, ValueError) as exc2:
                 bad = {"obj": None, "end": end, "raw": raw, "fixed": fixed,
-                       "error": "JSON 解析失败（自动修复后仍不合法）：{0}".format(exc2)}
+                       "error": f"JSON 解析失败（自动修复后仍不合法）：{exc2}"}
                 if fallback is None:
                     fallback = bad
                 # 报错位置往前回退几格即可落到「提前闭合字符串的那个引号」，
@@ -254,7 +254,7 @@ def _locate_bare_quote(text, start, src, exc, bare):
     pos = getattr(exc, "pos", None)
     if pos is None or not src:
         return -1
-    for back in range(0, 4):
+    for back in range(4):
         if pos - back < 0:
             break
         rel = src[pos - back]
