@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
-from pathlib import Path
 
 from common import SandboxError, workspace_dir
 
