@@ -204,12 +204,20 @@ function handle(ev) {
     case 'message': {
       const text = (ev.segments || []).filter(s => s.type === 'text').map(s => s.content).join('\n');
       const target = cur.answerCur || cur.answer;
-      target.innerHTML = text ? renderMarkdown(text)
+      let html = text ? renderMarkdown(text)
         : (ev.tool_calls ? '<p class="hint">（本轮仅发起工具调用）</p>' : '<p class="hint">（无正文输出）</p>');
+      if (ev.parse_errors) {
+        html += '<p class="hint" style="color:#b2492f">⚠ 有 ' + ev.parse_errors +
+          ' 处工具调用 JSON 解析失败，未执行，已要求模型重试</p>';
+      }
+      target.innerHTML = html;
       cur.raw += (ev.raw || '');
       scrollDown();
       break;
     }
+    case 'parse_error':
+      toast('工具调用 JSON 解析失败：' + (ev.error || ''), 'err');
+      break;
     case 'tool_start':
       addToolBlock(ev);
       break;

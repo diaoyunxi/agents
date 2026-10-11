@@ -55,13 +55,31 @@ async def _dispatch(name: str, arguments: dict) -> dict:
     return await tool_loader.call_tool(name, arguments)
 
 
+PARSE_RETRY_LIMIT = 3
+
+PARSE_ERROR_GUIDE = (
+    "请重新输出一个严格合法的 JSON 对象：\n"
+    "  1) 字符串里的换行必须写成 \\n，制表符写成 \\t；\n"
+    "  2) 只能用半角双引号 \"，不要用中文引号「」或 “ ”；\n"
+    "  3) 不要有尾逗号、注释，也不要用 Markdown 代码块包裹；\n"
+    "  4) content 再长也必须保持单行 JSON 字符串。"
+)
+
+
 def _format_results(results: list) -> str:
     lines = ["[工具执行结果]"]
+    has_parse_error = False
     for item in results:
         flag = "成功" if item.get("ok") else "失败"
+        if item.get("parse_error"):
+            has_parse_error = True
+            flag = "未执行（JSON 解析失败）"
         lines.append("- 工具 `{0}`：{1}".format(item["tool"], flag))
         lines.append("  参数: {0}".format(json.dumps(item.get("arguments", {}), ensure_ascii=False)[:500]))
         lines.append("  输出: {0}".format(str(item.get("output", ""))[:6000]))
+    if has_parse_error:
+        lines.append("注意：上述工具调用因为 JSON 不合法而**没有被执行**，请修正格式后重发。")
+        lines.append(PARSE_ERROR_GUIDE)
     lines.append("请根据以上结果决定下一步（继续调用工具，或给出最终答复）。")
     return "\n".join(lines)
 
@@ -102,6 +120,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
 
     with ChangeCollector() as collector:
         total_calls = 0
+        parse_streak = 0
         stop_reason = "completed"
         for round_index in range(1, max_rounds + 1):
             yield {"event": "round", "index": round_index}
@@ -134,20 +153,43 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
 
             segments = tool_parser.parse_segments(content)
             calls = [seg for seg in segments if seg["type"] == "tool_call"]
+            broken = [seg for seg in segments if seg["type"] == "tool_call_error"]
             yield {
                 "event": "message",
                 "round": round_index,
                 "segments": segments,
                 "tool_calls": len(calls),
+                "parse_errors": len(broken),
                 "raw": content,
             }
             messages.append({"role": "assistant", "content": content})
 
-            if not calls:
+            if not calls and not broken:
                 stop_reason = "completed"
                 break
 
             results = []
+
+            # 形似工具调用但 JSON 非法：回灌错误，让模型修正后重试
+            for seg in broken:
+                name = seg.get("tool") or "(未识别)"
+                output = "{0}\n\n{1}".format(seg["error"], PARSE_ERROR_GUIDE)
+                results.append({"tool": name, "arguments": {}, "ok": False,
+                                "output": output, "parse_error": True})
+                yield {"event": "tool_start", "tool": name, "arguments": {},
+                       "thought": "JSON 解析失败，未执行"}
+                yield {"event": "parse_error", "tool": name, "error": seg["error"],
+                       "raw": seg["raw"][:2000]}
+                yield {"event": "tool_end", "tool": name, "arguments": {}, "ok": False,
+                       "output": output}
+
+            parse_streak = parse_streak + 1 if (broken and not calls) else 0
+            if parse_streak >= PARSE_RETRY_LIMIT:
+                yield {"event": "limit",
+                       "message": "连续 {0} 轮工具调用 JSON 无法解析，已停止本轮，请检查模型输出格式。".format(parse_streak)}
+                stop_reason = "parse_failed"
+                break
+
             round_calls = 0
             for call in calls:
                 name = call["tool"]
@@ -175,6 +217,9 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 outcome = dict(outcome)
                 outcome["tool"] = name
                 outcome["arguments"] = args
+                if call.get("repaired"):
+                    outcome["output"] = "（你输出的 JSON 格式有误，已自动修复后执行；下次请严格合法）\n{0}".format(
+                        outcome.get("output", ""))
                 results.append(outcome)
                 yield {
                     "event": "tool_end",
