@@ -32,6 +32,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_tokens": 8192,
         "temperature": 0.7,
         "timeout": 180,
+        "use_function_calling": True,
     },
     "providers": [],
     "tool_limits": {

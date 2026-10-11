@@ -43,13 +43,15 @@ def _timeout():
         return DEFAULT_TIMEOUT
 
 
-def build_payload(provider, model, messages, stream=True):
+def build_payload(provider, model, messages, stream=True, tools=None):
     import config
     payload = {
         "model": model,
         "messages": messages,
         "stream": stream,
     }
+    if tools:
+        payload["tools"] = tools
     max_tokens = config.get("ai.max_tokens", 0)
     if max_tokens:
         payload["max_tokens"] = int(max_tokens)
@@ -92,26 +94,55 @@ async def test_provider(provider):
 
 
 def _extract_delta(data):
-    """从 SSE data 行中取出增量文本与思考内容。"""
+    """从 SSE data 行中取出增量文本、思考内容与函数调用片段。"""
     choices = data.get("choices") or []
     if not choices:
-        return "", ""
+        return "", "", []
     delta = choices[0].get("delta") or {}
     content = delta.get("content") or ""
     reasoning = (delta.get("reasoning_content") or delta.get("reasoning") or "")
     if isinstance(content, list):  # 兼容多模态 content 数组
         content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-    return content, reasoning
+    tool_calls = delta.get("tool_calls") or []
+    return content, reasoning, tool_calls
 
 
-async def stream_chat(provider, model, messages):
-    """流式调用对话接口，逐条产出事件字典。"""
+def _merge_tool_call(tool_calls, tc):
+    """把流式增量里的单个 tool_calls 片段合并进 tool_calls 列表（按 index 配平）。"""
+    idx = tc.get("index")
+    if idx is None:
+        idx = len(tool_calls)
+    while len(tool_calls) <= idx:
+        tool_calls.append({
+            "id": None,
+            "type": "function",
+            "function": {"name": "", "arguments": ""},
+        })
+    cur = tool_calls[idx]
+    if tc.get("id"):
+        cur["id"] = tc["id"]
+    if tc.get("type"):
+        cur["type"] = tc["type"]
+    fn = tc.get("function") or {}
+    if fn.get("name"):
+        cur["function"]["name"] += fn["name"]
+    if "arguments" in fn and fn.get("arguments") is not None:
+        cur["function"]["arguments"] += fn["arguments"]
+
+
+async def stream_chat(provider, model, messages, tools=None):
+    """流式调用对话接口，逐条产出事件字典。
+
+    除 thinking_delta / content_delta 外，若模型发起函数调用，
+    结束时额外产出一条 {"type": "tool_calls", "calls": [...]} 事件。
+    """
     base = normalize_base_url(provider.get("base_url", ""))
     if not base:
         raise ValueError("请先配置 Base URL")
     url = base + "/chat/completions"
-    payload = build_payload(provider, model, messages, stream=True)
+    payload = build_payload(provider, model, messages, stream=True, tools=tools)
     finish = None
+    tool_calls = []
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(_timeout(), connect=30)) as client:
         async with client.stream("POST", url, headers=_headers(provider), json=payload) as resp:
@@ -132,7 +163,9 @@ async def stream_chat(provider, model, messages):
                     continue
                 if data.get("error"):
                     raise ValueError("模型返回错误: {0}".format(json.dumps(data["error"], ensure_ascii=False)[:400]))
-                content, reasoning = _extract_delta(data)
+                content, reasoning, tcs = _extract_delta(data)
+                for tc in tcs:
+                    _merge_tool_call(tool_calls, tc)
                 if reasoning:
                     yield {"type": "thinking_delta", "content": reasoning}
                 if content:
@@ -140,14 +173,16 @@ async def stream_chat(provider, model, messages):
                 choices = data.get("choices") or []
                 if choices and choices[0].get("finish_reason"):
                     finish = choices[0]["finish_reason"]
+    if tool_calls:
+        yield {"type": "tool_calls", "calls": tool_calls}
     yield {"type": "done", "finish_reason": finish}
 
 
-async def chat(provider, model, messages):
-    """非流式调用，返回完整文本。"""
+async def chat(provider, model, messages, tools=None):
+    """非流式调用，返回 (文本内容, 思考内容, 函数调用列表)。"""
     base = normalize_base_url(provider.get("base_url", ""))
     url = base + "/chat/completions"
-    payload = build_payload(provider, model, messages, stream=False)
+    payload = build_payload(provider, model, messages, stream=False, tools=tools)
     async with httpx.AsyncClient(timeout=_timeout()) as client:
         resp = await client.post(url, headers=_headers(provider), json=payload)
         if resp.status_code >= 400:
@@ -157,4 +192,5 @@ async def chat(provider, model, messages):
     if not choices:
         raise ValueError("模型未返回内容")
     message = choices[0].get("message") or {}
-    return message.get("content") or "", message.get("reasoning_content") or ""
+    tool_calls = message.get("tool_calls") or []
+    return message.get("content") or "", message.get("reasoning_content") or "", tool_calls

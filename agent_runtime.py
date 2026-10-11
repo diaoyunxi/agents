@@ -13,6 +13,7 @@ import uuid
 
 import ai_client
 import config
+import function_tools
 import mcp_manager
 import prompt_builder
 import tool_parser
@@ -141,13 +142,25 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
         idle_streak = 0
         stop_reason = "completed"
         stop_detail = ""
+        # 构建 OpenAI function calling 所需的 tools schema（失败则降级为正文调用）
+        tools = []
+        if config.get("ai.use_function_calling", True):
+            try:
+                builtin = tool_loader.list_tools()
+                mcp_tools = await mcp_manager.list_all_tools()
+                tools = function_tools.build_function_tools(builtin, mcp_tools, [function_tools.STOP_FUNCTION])
+            except Exception as exc:  # noqa: BLE001
+                print("[runtime] 构建函数工具失败，降级为正文调用: " + str(exc))
+                tools = []
+
         for round_index in range(1, max_rounds + 1):
             yield {"event": "round", "index": round_index}
             content = ""
             reasoning = ""
+            tool_calls = []
             stream_error = ""
             try:
-                async for item in ai_client.stream_chat(provider, chosen_model, messages):
+                async for item in ai_client.stream_chat(provider, chosen_model, messages, tools=tools or None):
                     kind = item.get("type")
                     chunk = str(item.get("content") or "")
                     if kind == "thinking_delta":
@@ -156,10 +169,13 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                     elif kind == "content_delta":
                         content += chunk
                         yield {"event": "delta", "content": chunk}
+                    elif kind == "tool_calls":
+                        tool_calls = item.get("calls") or []
             except Exception as exc:  # noqa: BLE001
                 stream_error = str(exc)
                 try:
-                    content, reasoning = await ai_client.chat(provider, chosen_model, messages)
+                    content, reasoning, tool_calls = await ai_client.chat(
+                        provider, chosen_model, messages, tools=tools or None)
                 except Exception as exc2:  # noqa: BLE001
                     yield {"event": "error", "message": str(exc2) or stream_error}
                     stop_reason = "error"
@@ -170,20 +186,112 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
             if reasoning:
                 yield {"event": "thinking_done", "content": reasoning}
 
+            # 解析原生（OpenAI function calling）工具调用
+            native_calls = []
+            for tc in (tool_calls or []):
+                fn = tc.get("function") or {}
+                name = fn.get("name", "")
+                raw_args = fn.get("arguments") or ""
+                try:
+                    args = json.loads(raw_args) if raw_args.strip() else {}
+                except (json.JSONDecodeError, ValueError):
+                    args = {"__raw__": raw_args}
+                native_calls.append({
+                    "id": tc.get("id") or "call_{0}".format(uuid.uuid4().hex[:12]),
+                    "name": name,
+                    "arguments": args,
+                    "raw_args": raw_args,
+                })
+
             segments = tool_parser.parse_segments(content)
-            calls = [seg for seg in segments if seg["type"] == "tool_call"]
+            inline_calls = [seg for seg in segments if seg["type"] == "tool_call"]
             broken = [seg for seg in segments if seg["type"] == "tool_call_error"]
+            for nc in native_calls:
+                segments.append({"type": "tool_call", "tool": nc["name"],
+                                 "arguments": nc["arguments"], "thought": "", "raw": nc["raw_args"]})
+
             yield {
                 "event": "message",
                 "round": round_index,
                 "segments": segments,
-                "tool_calls": len(calls),
+                "tool_calls": len(native_calls) + len(inline_calls),
                 "parse_errors": len(broken),
                 "raw": content,
             }
+
+            # ---- 路径一：原生 function calling ----
+            if native_calls:
+                idle_streak = 0
+                messages.append({
+                    "role": "assistant",
+                    "content": content or None,
+                    "tool_calls": [
+                        {"id": nc["id"], "type": "function",
+                         "function": {"name": nc["name"], "arguments": nc["raw_args"]}}
+                        for nc in native_calls
+                    ],
+                })
+                tool_messages = []
+                round_calls = 0
+                stopped = False
+                for nc in native_calls:
+                    name = nc["name"]
+                    args = nc["arguments"]
+                    deny = _check_allowed(name, limits)
+                    if deny:
+                        tool_messages.append({"role": "tool", "tool_call_id": nc["id"], "content": deny})
+                        yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": deny}
+                        continue
+                    is_stop = name == STOP_TOOL
+                    if not is_stop:
+                        if total_calls >= max_total:
+                            msg = "已达到本会话工具调用总上限 {0} 次，停止调用并给出总结。".format(max_total)
+                            tool_messages.append({"role": "tool", "tool_call_id": nc["id"], "content": msg})
+                            yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
+                            continue
+                        if round_calls >= max_per_round:
+                            msg = "本轮工具调用次数已达上限 {0} 次。".format(max_per_round)
+                            tool_messages.append({"role": "tool", "tool_call_id": nc["id"], "content": msg})
+                            yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
+                            continue
+                        total_calls += 1
+                        round_calls += 1
+                    yield {"event": "tool_start", "tool": name, "arguments": args, "thought": ""}
+                    outcome = await _dispatch(name, args)
+                    outcome = dict(outcome)
+                    outcome["tool"] = name
+                    outcome["arguments"] = args
+                    yield {
+                        "event": "tool_end",
+                        "tool": name,
+                        "arguments": args,
+                        "ok": bool(outcome.get("ok", True)),
+                        "output": str(outcome.get("output", ""))[:20000],
+                    }
+                    yield {"event": "changes", "changes": collector.snapshot()}
+                    tool_messages.append({
+                        "role": "tool",
+                        "tool_call_id": nc["id"],
+                        "content": str(outcome.get("output", ""))[:20000],
+                    })
+                    if outcome.get("stop_task"):
+                        stopped = True
+                        stop_detail = str(args.get("reason") or outcome.get("reason") or "").strip()
+                        break
+                messages.extend(tool_messages)
+                yield {"event": "round_done", "index": round_index, "calls": total_calls,
+                       "elapsed_ms": int((time.time() - started) * 1000)}
+                if stopped:
+                    stop_reason = "stopped"
+                    yield {"event": "stopped", "reason": stop_detail,
+                           "message": "模型已调用 `stop` 结束本次任务。" + (" 说明: " + stop_detail if stop_detail else "")}
+                    break
+                continue
+
+            # ---- 路径二：正文调用（兼容模型未走 function calling） ----
             messages.append({"role": "assistant", "content": content})
 
-            if not calls and not broken:
+            if not inline_calls and not broken:
                 idle_streak += 1
                 if idle_streak >= IDLE_PUSH_LIMIT:
                     stop_reason = "idle"
@@ -211,7 +319,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 yield {"event": "tool_end", "tool": name, "arguments": {}, "ok": False,
                        "output": output}
 
-            parse_streak = parse_streak + 1 if (broken and not calls) else 0
+            parse_streak = parse_streak + 1 if (broken and not inline_calls) else 0
             if parse_streak >= PARSE_RETRY_LIMIT:
                 yield {"event": "limit",
                        "message": "连续 {0} 轮工具调用 JSON 无法解析，已停止本轮，请检查模型输出格式。".format(parse_streak)}
@@ -220,7 +328,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
 
             round_calls = 0
             stopped = False
-            for call in calls:
+            for call in inline_calls:
                 name = call["tool"]
                 args = call["arguments"]
                 deny = _check_allowed(name, limits)
