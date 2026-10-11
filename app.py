@@ -234,7 +234,7 @@ async def api_fetch_models(pid: str, request: Request, payload: dict = Body(defa
     try:
         models = await ai_client.fetch_models(provider)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
     def _mutate(cfg):
         for item in cfg["providers"]:
@@ -260,7 +260,7 @@ async def api_test_provider(pid: str, request: Request, payload: dict = Body(def
     try:
         return await ai_client.test_provider(provider)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.post("/api/providers/{pid}/select")
