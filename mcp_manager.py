@@ -49,7 +49,7 @@ async def _connect(server: dict) -> dict:
             read, write = await stack.enter_async_context(stdio_client(_params(server)))
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             await stack.aclose()
             _connections[sid] = {"closed": True, "error": str(exc), "tools": []}
             return _connections[sid]
@@ -66,7 +66,7 @@ async def _connect(server: dict) -> dict:
             }
             for t in listing.tools
         ]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         entry["error"] = str(exc)
     return entry
 
@@ -128,7 +128,7 @@ async def call_tool(full_name: str, arguments: dict) -> dict:
         return {"ok": False, "output": "MCP 服务器连接失败: " + (entry.get("error") or "未知错误")}
     try:
         result = await entry["session"].call_tool(raw_name, arguments or {})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"ok": False, "output": "MCP 工具调用失败: " + str(exc)}
     chunks = []
     for item in getattr(result, "content", []) or []:
@@ -194,6 +194,6 @@ async def close_all() -> None:
         if entry.get("stack"):
             try:
                 await entry["stack"].aclose()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         _connections[sid] = {"closed": True, "tools": [], "error": ""}

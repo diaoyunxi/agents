@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import config
-from tools import loader as tool_loader
 import skill_loader
+from tools import loader as tool_loader
 
 CORE_RULES = """你是一个运行在本地工作区里的智能体 Agent，可以通过正文调用工具来读写文件、执行命令，真正帮用户完成工作。
 
@@ -50,7 +50,7 @@ def _mcp_section() -> str:
     try:
         from mcp_manager import mcp_prompt_section
         return mcp_prompt_section()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 

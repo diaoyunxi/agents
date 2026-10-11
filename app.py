@@ -233,7 +233,7 @@ async def api_fetch_models(pid: str, request: Request, payload: dict = Body(defa
     provider["base_url"] = ai_client.normalize_base_url(provider.get("base_url", ""))
     try:
         models = await ai_client.fetch_models(provider)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     def _mutate(cfg):
@@ -259,7 +259,7 @@ async def api_test_provider(pid: str, request: Request, payload: dict = Body(def
     provider["base_url"] = ai_client.normalize_base_url(provider.get("base_url", ""))
     try:
         return await ai_client.test_provider(provider)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -405,7 +405,7 @@ async def api_chat(request: Request, payload: dict = Body(...)):
         try:
             async for event in agent_runtime.run_chat(message, history, provider_id, model):
                 yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             yield "data: " + json.dumps({"event": "error", "message": str(exc)}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"event": "end", "reason": "error"}, ensure_ascii=False) + "\n\n"
 
@@ -450,5 +450,5 @@ async def on_startup():
     tool_loader.refresh()
     try:
         await mcp_manager.refresh_prompt()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print("[mcp] 初始化失败:", exc)
