@@ -56,7 +56,7 @@ def run(pattern: str, path: str = ".", glob: str | None = None, regex: bool = Fa
             try:
                 text = read_text(item)
             except Exception:  # noqa: BLE001
-                continue
+                pass  # 跳过无法读取的文件（二进制、权限不足等）
             for idx, line in enumerate(text.splitlines(), 1):
                 matched = matcher.search(line) if matcher else (needle in line.lower())
                 if matched:
