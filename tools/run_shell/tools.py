@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
-import sys
-from pathlib import Path
 
 from common import SandboxError, workspace_dir
 
@@ -23,6 +22,23 @@ PARAMETERS = {
 
 BLOCKED = ["rm -rf /", "rm -rf ~", "format ", "shutdown", "mkfs", "del /f /s /q c:", ":(){:|:&};:"]
 
+# 危险的 shell 元字符，用于检测潜在的注入攻击
+SHELL_META = set("|;&$`(){}[]<>!#~")
+
+
+def _looks_like_shell_pipeline(command: str) -> bool:
+    """检测命令是否包含管道/重定向等需要 shell 解析的结构。"""
+    in_single = False
+    in_double = False
+    for ch in command:
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double and ch in "|&><":
+            return True
+    return False
+
 
 def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
     if not command.strip():
@@ -40,10 +56,25 @@ def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
         raise SandboxError(f"工作目录 {work_dir} 超出工作区") from exc
 
     timeout = max(5, min(int(timeout or 120), 600))
+
+    # 安全修复：优先使用 shell=False + shlex.split 防止命令注入 (CWE-78, S602)
+    # 仅当命令包含管道/重定向等 shell 结构时才回退到 shell=True
+    use_shell = _looks_like_shell_pipeline(command)
+    if use_shell:
+        args = command
+    else:
+        try:
+            args = shlex.split(command)
+        except ValueError as exc:
+            return {"ok": False, "output": f"命令解析失败: {exc}"}
+        if not args:
+            return {"ok": False, "output": "命令为空"}
+
     try:
         proc = subprocess.run(
-            command,
-            shell=True,
+            args,
+            shell=use_shell,  # noqa: S602 — 仅在检测到管道/重定向时使用
+            check=False,
             cwd=str(work_dir),
             capture_output=True,
             text=True,
@@ -64,4 +95,4 @@ def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
     return {"ok": proc.returncode == 0, "output": "\n".join(parts)}
 
 
-__all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]
+__all__ = ["DESCRIPTION", "NAME", "PARAMETERS", "run"]
