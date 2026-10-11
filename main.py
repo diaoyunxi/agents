@@ -20,7 +20,12 @@ def main() -> None:
     print("=" * 62)
     print(" Agents 已启动: " + url)
     print(" 工作区: " + str(config.workspace_dir()))
-    print(" 默认账号: " + str(cfg.get("auth", {}).get("username", "root")) + " / " + str(cfg.get("auth", {}).get("password", "root")))
+    auth = cfg.get("auth", {})
+    username = auth.get("username", "root")
+    if not auth.get("setup_done", False):
+        print(f" 默认账号: {username}（首次登录后请立即修改密码）")
+    else:
+        print(f" 账号: {username}")
     print("=" * 62)
     # 自动更新重启时由 updater.py 设置此变量，避免重复弹出浏览器
     if not os.environ.get("AGENTS_NO_BROWSER"):
