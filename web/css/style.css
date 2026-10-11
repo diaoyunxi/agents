@@ -263,6 +263,71 @@ label > .label {
 }
 .thread-inner { max-width: 880px; margin: 0 auto; }
 
+/* 左侧对话列表 */
+.convos {
+  width: 268px;
+  flex: none;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.convos-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-head);
+  font-size: 13px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.convos-head .accent { text-transform: none; letter-spacing: 0; padding: 7px 13px; }
+.convos-body { flex: 1; overflow: auto; padding: 12px; }
+.convo {
+  position: relative;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 9px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.convo:hover { border-color: var(--gray); background: var(--surface-2); }
+.convo.active { border-color: var(--orange); background: #fdf6f3; }
+.convo-title {
+  font-family: var(--font-head);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  padding-right: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.convo-meta { font-size: 11.5px; color: var(--text-soft); margin-top: 3px; font-family: var(--font-mono); }
+.convo-del {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  font-size: 16px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-soft);
+  opacity: 0;
+  transition: opacity .12s;
+}
+.convo:hover .convo-del { opacity: 1; }
+.convo-del:hover { color: #b2492f; background: #fbeeeb; }
+
 .turn { margin-bottom: 26px; }
 .turn-head {
   display: flex;
@@ -527,9 +592,11 @@ label > .label {
 
 @media (max-width: 1100px) {
   .panel { width: 320px; }
+  .convos { width: 232px; }
 }
 @media (max-width: 860px) {
   .panel { display: none; }
+  .convos { display: none; }
   .thread, .composer { padding-left: 16px; padding-right: 16px; }
   .settings-layout { flex-direction: column; }
   .side-nav { position: static; flex-direction: row; flex-wrap: wrap; }

@@ -8,6 +8,11 @@ let controller = null;
 let cur = null;
 let lastChangeKey = '';
 
+/* ---------- 会话管理 ---------- */
+let currentConvId = null;
+let convTitle = '';
+const convListEl = document.getElementById('convList');
+
 function scrollDown() {
   threadEl.scrollTop = threadEl.scrollHeight;
 }
@@ -173,6 +178,143 @@ function renderChanges(list) {
   });
 }
 
+/* ---------- 对话（持久化到后端 chat/） ---------- */
+
+function clearThread() {
+  threadInner.innerHTML = '';
+}
+
+function showIntroPlaceholder() {
+  clearThread();
+  const turn = el('div', 'turn agent');
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', 'Agent'));
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, '就绪'));
+  turn.appendChild(head);
+  const md = el('div', 'md');
+  md.innerHTML = '<p>开始一段新对话，或从左栏选择已有对话继续。</p>';
+  turn.appendChild(md);
+  threadInner.appendChild(turn);
+}
+
+function addUserTurn(text) {
+  const turn = el('div', 'turn user');
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', '你'));
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, now()));
+  turn.appendChild(head);
+  turn.appendChild(el('div', 'user-text', text));
+  threadInner.appendChild(turn);
+  scrollDown();
+}
+
+function addAssistantTurn(content) {
+  const turn = el('div', 'turn agent');
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', 'Agent'));
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, ''));
+  turn.appendChild(head);
+  const body = el('div', 'md answer');
+  body.innerHTML = content ? renderMarkdown(content) : '<p class="hint">（无正文输出）</p>';
+  turn.appendChild(body);
+  threadInner.appendChild(turn);
+  scrollDown();
+}
+
+async function refreshConversationList() {
+  let list = [];
+  try {
+    const res = await api('/api/conversations');
+    list = res.conversations || [];
+  } catch (err) { /* 忽略 */ }
+  convListEl.innerHTML = '';
+  if (!list.length) {
+    convListEl.appendChild(el('div', 'empty', '还没有对话，点击「+ 新对话」开始'));
+    return;
+  }
+  list.forEach(function (c) {
+    const item = el('div', 'convo');
+    item.dataset.id = c.id;
+    if (c.id === currentConvId) item.classList.add('active');
+    item.appendChild(el('div', 'convo-title', c.title || '新对话'));
+    item.appendChild(el('div', 'convo-meta', (c.updated_at || '') + ' · ' + (c.message_count || 0) + ' 条'));
+    const del = el('button', 'convo-del', '×');
+    del.title = '删除对话';
+    del.onclick = async function (e) {
+      e.stopPropagation();
+      if (!confirm('确定删除该对话？此操作不可恢复。')) return;
+      try {
+        await api('/api/conversations/' + c.id, { method: 'DELETE' });
+        if (currentConvId === c.id) { currentConvId = null; history.length = 0; showIntroPlaceholder(); }
+        await refreshConversationList();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+    item.appendChild(del);
+    item.onclick = function () { loadConversationById(c.id); };
+    convListEl.appendChild(item);
+  });
+}
+
+async function loadConversationById(id) {
+  try {
+    const res = await api('/api/conversations/' + id);
+    currentConvId = res.conversation.id;
+    convTitle = res.conversation.title || '新对话';
+    history.length = 0;
+    (res.conversation.messages || []).forEach(function (m) {
+      history.push({ role: m.role, content: m.content });
+    });
+    clearThread();
+    if (!history.length) { showIntroPlaceholder(); }
+    else {
+      history.forEach(function (m) {
+        if (m.role === 'user') addUserTurn(m.content);
+        else addAssistantTurn(m.content);
+      });
+    }
+    await refreshConversationList();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function ensureConversation() {
+  if (currentConvId) return currentConvId;
+  const res = await api('/api/conversations', { body: {} });
+  currentConvId = res.conversation.id;
+  convTitle = res.conversation.title || '新对话';
+  await refreshConversationList();
+  return currentConvId;
+}
+
+function currentTitle() {
+  if (convTitle && convTitle !== '新对话') return convTitle;
+  const first = history.find(function (m) { return m.role === 'user'; });
+  return first ? first.content.slice(0, 24) : '新对话';
+}
+
+async function saveConversation() {
+  if (!currentConvId) return;
+  convTitle = currentTitle();
+  try {
+    await api('/api/conversations/' + currentConvId, {
+      method: 'PUT',
+      body: { messages: history, title: convTitle },
+    });
+    await refreshConversationList();
+  } catch (err) { /* 静默保存失败 */ }
+}
+
+document.getElementById('newChat').onclick = async function () {
+  currentConvId = null;
+  convTitle = '';
+  history.length = 0;
+  await ensureConversation();
+  showIntroPlaceholder();
+  document.getElementById('input').focus();
+};
+
 /* ---------- SSE 会话 ---------- */
 function handle(ev) {
   switch (ev.event) {
@@ -255,6 +397,7 @@ function handle(ev) {
         ' · 轮次 ' + cur.round + ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' +
         (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
       if (cur.raw) history.push({ role: 'assistant', content: cur.raw });
+      saveConversation();
       break;
     }
   }
@@ -264,6 +407,7 @@ async function send() {
   const input = document.getElementById('input');
   const text = input.value.trim();
   if (!text || controller) return;
+  try { await ensureConversation(); } catch (err) { /* 保存不可用时仍可对话 */ }
   input.value = '';
 
   const turn = el('div', 'turn user');
@@ -334,4 +478,5 @@ document.getElementById('input').addEventListener('keydown', function (e) {
 });
 
 loadModels().catch(err => toast(err.message, 'err'));
+refreshConversationList().catch(err => toast(err.message, 'err'));
 

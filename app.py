@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import time
 from pathlib import Path
@@ -22,6 +23,19 @@ from tools import loader as tool_loader
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
+CHAT_DIR = BASE_DIR / "chat"
+
+
+def _chat_dir() -> Path:
+    CHAT_DIR.mkdir(parents=True, exist_ok=True)
+    return CHAT_DIR
+
+
+def _conv_path(cid: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(cid))
+    if not safe:
+        raise HTTPException(status_code=400, detail="非法的对话 ID")
+    return _chat_dir() / f"{safe}.json"
 
 app = FastAPI(title="Agents", version="1.0.0")
 _sessions: dict = {}
@@ -416,6 +430,85 @@ async def api_chat(request: Request, payload: dict = Body(...)):
     )
 
 
+# --------------------------------------------------------------------------- #
+# 对话（持久化为 chat/ 下的 JSON 文件）
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/api/conversations")
+async def api_list_conversations(request: Request):
+    require_auth(request)
+    items = []
+    for p in sorted(_chat_dir().glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        items.append({
+            "id": data.get("id", p.stem),
+            "title": data.get("title", "未命名对话"),
+            "created_at": data.get("created_at", ""),
+            "updated_at": data.get("updated_at", ""),
+            "message_count": len(data.get("messages", [])),
+        })
+    return {"conversations": items}
+
+
+@app.post("/api/conversations")
+async def api_create_conversation(request: Request, payload: dict = Body(default={})):
+    require_auth(request)
+    cid = str(payload.get("id") or secrets.token_hex(8))
+    title = str(payload.get("title", "新对话")).strip() or "新对话"
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    conv = {
+        "id": cid,
+        "title": title,
+        "created_at": stamp,
+        "updated_at": stamp,
+        "messages": [],
+    }
+    _conv_path(cid).write_text(json.dumps(conv, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"conversation": conv}
+
+
+@app.get("/api/conversations/{cid}")
+async def api_get_conversation(cid: str, request: Request):
+    require_auth(request)
+    path = _conv_path(cid)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return {"conversation": json.loads(path.read_text(encoding="utf-8"))}
+
+
+@app.put("/api/conversations/{cid}")
+async def api_update_conversation(cid: str, request: Request, payload: dict = Body(...)):
+    require_auth(request)
+    path = _conv_path(cid)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="对话不存在")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if "title" in payload:
+        data["title"] = str(payload["title"]).strip() or data.get("title", "新对话")
+    if "messages" in payload:
+        data["messages"] = [
+            {"role": m.get("role"), "content": str(m.get("content", ""))}
+            for m in (payload["messages"] or [])
+            if m.get("role") in ("user", "assistant")
+        ]
+    data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"conversation": data}
+
+
+@app.delete("/api/conversations/{cid}")
+async def api_delete_conversation(cid: str, request: Request):
+    require_auth(request)
+    path = _conv_path(cid)
+    if path.exists():
+        path.unlink()
+    return {"ok": True}
+
+
 @app.get("/api/health")
 async def api_health():
     return {"ok": True, "tools": len(tool_loader.registry()), "workspace": str(config.workspace_dir())}
@@ -446,6 +539,7 @@ async def settings_page():
 
 @app.on_event("startup")
 async def on_startup():
+    _chat_dir()
     config.start_watcher()
     tool_loader.refresh()
     try:
