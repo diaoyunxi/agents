@@ -87,7 +87,7 @@ def _kill(pid: int) -> None:
         return
     if os.name == "nt":
         _ = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                           capture_output=True, env=os.environ)
+                           check=False, capture_output=True, env=os.environ)
     else:
         try:
             os.kill(pid, signal.SIGKILL)
@@ -112,7 +112,7 @@ def _run(cmd: list[str], cwd: Path, timeout: float) -> tuple[int, str]:
         if key not in env:
             env[key] = value
     try:
-        proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True,
+        proc = subprocess.run(cmd, check=False, cwd=str(cwd), capture_output=True,
                               timeout=timeout, env=env)
     except FileNotFoundError:
         return -1, "未找到命令：{}".format(cmd[0])
