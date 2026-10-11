@@ -6,5 +6,8 @@ venv/
 *.log
 config.json
 chat/
+# 运行时产物：登录会话与自更新结果
+.sessions.json
+.updater_result.json
 # 反向代理拉取的第三方参考项目（只读参考，不纳入版本库）
 _ref_*/

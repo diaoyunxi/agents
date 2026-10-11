@@ -34,6 +34,8 @@ agents/
 ├─ mcp_manager.py       MCP 服务器接入与工具注册
 ├─ common.py            工作区沙箱、文件变更与 diff 采集
 ├─ config.py            config.json 读写与变更热加载
+├─ git_update.py        自更新检查：git status / fetch，比较本地与远端提交
+├─ updater.py           独立的自更新重启器（负责拉代码并重新拉起服务）
 ├─ skill_loader.py      skills/ 目录加载
 ├─ tools/               工具目录：每个工具一个文件夹
 │  ├─ read_file/  ├─ write_file/  ├─ edit_file/
@@ -51,6 +53,16 @@ agents/
 - `/` 登录与新手引导
 - `/chat` 对话：中间逐轮展示思考、输出、工具调用全过程；右侧面板汇总文件变更
 - `/settings` 设置：左侧导航切换 AI 提供商、模型与默认、工具与限制、MCP、技能与提示词、账号
+
+## 自动更新
+
+每次打开页面时，后端都会执行一次 `git status` 并对比远端分支（`git fetch` + `rev-list`）。若发现新提交，页面左下角出现提示条，可展开查看提交列表，点击「立即更新」即可完成更新与重启。
+
+1. 后端以**分离进程**方式启动 `updater.py`，随后让 Web 服务进程自行退出；
+2. `updater.py` 等待旧进程完全退出后执行 `git fetch` + `git merge --ff-only`，再拉起新的 `python main.py`；
+3. 前端轮询 `/api/health`，服务恢复后自动刷新页面（登录状态因会话落盘而得以保留）。
+
+关键在于更新器是**独立进程**：Python 启动时就把源码编译进内存，之后不再依赖磁盘文件，因此即使 git 把磁盘上的源码（包括 `updater.py` 自己）替换或删除，它依然能执行完「拉代码 → 重启服务」的闭环。若网络不通，拉取会快速失败，并按原代码照常重启，保证服务可用。
 
 ## 配置说明（config.json）
 

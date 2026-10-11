@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -15,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 import agent_runtime
 import ai_client
 import config
+import git_update
 import mcp_manager
 import prompt_builder
 import skill_loader
@@ -24,6 +28,7 @@ from tools import loader as tool_loader
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 CHAT_DIR = BASE_DIR / "chat"
+SESSION_FILE = BASE_DIR / ".sessions.json"
 
 
 def _chat_dir() -> Path:
@@ -38,7 +43,25 @@ def _conv_path(cid: str) -> Path:
     return _chat_dir() / f"{safe}.json"
 
 app = FastAPI(title="Agents", version="1.0.0")
-_sessions: dict = {}
+
+
+def _load_sessions() -> dict:
+    """会话落盘，确保自动更新重启后登录状态不丢失（否则用户需重新登录）。"""
+    try:
+        data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and "ts" in v}
+
+
+def _save_sessions() -> None:
+    try:
+        SESSION_FILE.write_text(json.dumps(_sessions), encoding="utf-8")
+    except OSError:
+        pass
+
+
+_sessions: dict = _load_sessions()
 
 
 # --------------------------------------------------------------------------- #
@@ -86,6 +109,7 @@ async def api_login(payload: dict = Body(...)):
     if not cfg.get("enabled", True):
         token = _new_token()
         _sessions[token] = {"ts": time.time()}
+        _save_sessions()
         return {"ok": True, "token": token, "username": "guest"}
     username = str(payload.get("username", ""))
     password = str(payload.get("password", ""))
@@ -93,6 +117,7 @@ async def api_login(payload: dict = Body(...)):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = _new_token()
     _sessions[token] = {"ts": time.time()}
+    _save_sessions()
     response = JSONResponse({"ok": True, "token": token, "username": username})
     response.set_cookie("agents_token", token, httponly=True, samesite="lax", max_age=7 * 24 * 3600)
     return response
@@ -102,6 +127,7 @@ async def api_login(payload: dict = Body(...)):
 async def api_logout(request: Request):
     token = request.cookies.get("agents_token", "")
     _sessions.pop(token, None)
+    _save_sessions()
     response = JSONResponse({"ok": True})
     response.delete_cookie("agents_token")
     return response
@@ -512,6 +538,36 @@ async def api_delete_conversation(cid: str, request: Request):
 @app.get("/api/health")
 async def api_health():
     return {"ok": True, "tools": len(tool_loader.registry()), "workspace": str(config.workspace_dir())}
+
+
+# --------------------------------------------------------------------------- #
+# 自更新（检测远端新提交 → 一键更新并重启）
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/api/update/status")
+async def api_update_status(request: Request, force: bool = False):
+    """每次访问 web 都会调用：执行 git status 并比较远端分支，判断是否有新提交。"""
+    require_auth(request)
+    return await asyncio.to_thread(git_update.info, force)
+
+
+@app.get("/api/update/result")
+async def api_update_result(request: Request):
+    require_auth(request)
+    return git_update.read_result()
+
+
+@app.post("/api/update/apply")
+async def api_update_apply(request: Request):
+    """一键更新：把拉取与重启交给独立的 updater.py，随后本进程自行退出。"""
+    require_auth(request)
+    result = await asyncio.to_thread(git_update.start_update)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message", "更新失败"))
+    # 留出时间把响应发回浏览器，再结束自身进程，交给 updater.py 完成替换与重启
+    threading.Timer(2.0, lambda: os._exit(0)).start()
+    return result
 
 
 # --------------------------------------------------------------------------- #
