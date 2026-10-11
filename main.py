@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """启动入口：读取 config.json 中的 host/port，启动 Web 服务（默认 6573 端口）。"""
 
 from __future__ import annotations

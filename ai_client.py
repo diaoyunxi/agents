@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """AI 提供商客户端：OpenAI 兼容接口，支持多提供商、模型列表获取与流式对话。"""
 
 from __future__ import annotations
