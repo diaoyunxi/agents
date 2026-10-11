@@ -21,16 +21,35 @@ PARAMETERS = {
     "required": ["command"],
 }
 
-BLOCKED = ["rm -rf /", "rm -rf ~", "format ", "shutdown", "mkfs", "del /f /s /q c:", ":(){:|:&};:"]
+BLOCKED = [
+    "rm -rf /", "rm -rf ~", "rm -rf /*", "format ", "shutdown",
+    "mkfs", "del /f /s /q c:", ":(){:|:&};:",
+    "curl|sh", "curl|bash", "wget|sh", "wget|bash",
+    "eval ", "exec ", "python -c", "python3 -c",
+    "base64 -d", "base64 --decode",
+]
+
+
+def _check_shell_injection(command: str) -> str | None:
+    """检测常见 shell 注入模式，返回被匹配的片段或 None。"""
+    import re
+
+    low = command.lower()
+    for bad in BLOCKED:
+        if bad in low:
+            return bad.strip()
+    # 检测命令替换（$() 和反引号）
+    if re.search(r'\$\(|`[^`]+`', command):
+        return "shell 命令替换 ($(...) / `...`)"
+    return None
 
 
 def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
     if not command.strip():
         return {"ok": False, "output": "命令为空"}
-    low = command.lower()
-    for bad in BLOCKED:
-        if bad in low:
-            return {"ok": False, "output": f"命令被安全策略拒绝（包含危险片段: {bad.strip()}）"}
+    blocked_hit = _check_shell_injection(command)
+    if blocked_hit:
+        return {"ok": False, "output": f"命令被安全策略拒绝（包含危险片段: {blocked_hit}）"}
 
     root = workspace_dir().resolve()
     work_dir = (root / cwd).resolve() if cwd else root
