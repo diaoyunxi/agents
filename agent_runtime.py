@@ -19,6 +19,18 @@ import tool_parser
 from common import ChangeCollector
 from tools import loader as tool_loader
 
+# 控制信号工具：模型调用它即表示「本次任务到此结束」
+STOP_TOOL = "stop"
+
+# 模型未调用任何工具时的续推提示；连续触发到上限则强制结束，避免死循环
+IDLE_PUSH_LIMIT = 3
+IDLE_PUSH_TEMPLATE = (
+    "（运行时提醒）你这一轮没有调用任何工具，任务尚未被标记为结束。\n"
+    "请继续推进：如果还有工作没做，就调用相应工具去做；如果确实已经完成，"
+    "请调用工具 `{stop}` 来显式结束（可带参数 reason 说明理由）。"
+).format(stop=STOP_TOOL)
+IDLE_GIVE_UP = "已连续 {0} 轮未调用任何工具，本次任务到此结束。"
+
 def resolve_provider(provider_id: str = "", model: str = "") -> tuple:
     """返回 (provider, model)；请求未指定时回落到 config 中的当前选择。"""
     providers = config.get("providers", []) or []
@@ -37,7 +49,9 @@ def _limits() -> dict:
 
 
 def _check_allowed(name: str, limits: dict) -> str:
-    """返回空串表示允许，否则返回拒绝原因。"""
+    """返回空串表示允许，否则返回拒绝原因。`stop` 是控制信号，永远放行。"""
+    if name == STOP_TOOL:
+        return ""
     if not limits.get("enabled", True):
         return ""
     allowed = limits.get("allowed_tools") or []
@@ -61,8 +75,9 @@ PARSE_ERROR_GUIDE = (
     "请重新输出一个严格合法的 JSON 对象：\n"
     "  1) 字符串里的换行必须写成 \\n，制表符写成 \\t；\n"
     "  2) 只能用半角双引号 \"，不要用中文引号「」或 “ ”；\n"
-    "  3) 不要有尾逗号、注释，也不要用 Markdown 代码块包裹；\n"
-    "  4) content 再长也必须保持单行 JSON 字符串。"
+    "  3) 内容里要出现的双引号必须写成 \\\"，不要直接输出裸引号；\n"
+    "  4) 不要有尾逗号、注释，也不要用 Markdown 代码块包裹；\n"
+    "  5) content 再长也必须保持单行 JSON 字符串。"
 )
 
 
@@ -81,6 +96,8 @@ def _format_results(results: list) -> str:
         lines.append("注意：上述工具调用因为 JSON 不合法而**没有被执行**，请修正格式后重发。")
         lines.append(PARSE_ERROR_GUIDE)
     lines.append("请根据以上结果决定下一步（继续调用工具，或给出最终答复）。")
+    if any(item.get("stop_task") for item in results):
+        lines.append("你已调用 `{0}`，本轮交互到此结束，不会再回灌新的指令。".format(STOP_TOOL))
     return "\n".join(lines)
 
 
@@ -121,7 +138,9 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
     with ChangeCollector() as collector:
         total_calls = 0
         parse_streak = 0
+        idle_streak = 0
         stop_reason = "completed"
+        stop_detail = ""
         for round_index in range(1, max_rounds + 1):
             yield {"event": "round", "index": round_index}
             content = ""
@@ -165,8 +184,17 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
             messages.append({"role": "assistant", "content": content})
 
             if not calls and not broken:
-                stop_reason = "completed"
-                break
+                idle_streak += 1
+                if idle_streak >= IDLE_PUSH_LIMIT:
+                    stop_reason = "idle"
+                    stop_detail = IDLE_GIVE_UP.format(idle_streak)
+                    yield {"event": "limit", "message": stop_detail}
+                    break
+                messages.append({"role": "user", "content": IDLE_PUSH_TEMPLATE})
+                yield {"event": "round_done", "index": round_index, "calls": 0,
+                       "elapsed_ms": int((time.time() - started) * 1000)}
+                continue
+            idle_streak = 0
 
             results = []
 
@@ -191,6 +219,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 break
 
             round_calls = 0
+            stopped = False
             for call in calls:
                 name = call["tool"]
                 args = call["arguments"]
@@ -199,19 +228,20 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                     results.append({"tool": name, "arguments": args, "ok": False, "output": deny})
                     yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": deny}
                     continue
-                if total_calls >= max_total:
-                    msg = "已达到本会话工具调用总上限 {0} 次，停止调用并给出总结。".format(max_total)
-                    results.append({"tool": name, "arguments": args, "ok": False, "output": msg})
-                    yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
-                    continue
-                if round_calls >= max_per_round:
-                    msg = "本轮工具调用次数已达上限 {0} 次。".format(max_per_round)
-                    results.append({"tool": name, "arguments": args, "ok": False, "output": msg})
-                    yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
-                    continue
-
-                total_calls += 1
-                round_calls += 1
+                is_stop = name == STOP_TOOL
+                if not is_stop:
+                    if total_calls >= max_total:
+                        msg = "已达到本会话工具调用总上限 {0} 次，停止调用并给出总结。".format(max_total)
+                        results.append({"tool": name, "arguments": args, "ok": False, "output": msg})
+                        yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
+                        continue
+                    if round_calls >= max_per_round:
+                        msg = "本轮工具调用次数已达上限 {0} 次。".format(max_per_round)
+                        results.append({"tool": name, "arguments": args, "ok": False, "output": msg})
+                        yield {"event": "tool_end", "tool": name, "arguments": args, "ok": False, "output": msg}
+                        continue
+                    total_calls += 1
+                    round_calls += 1
                 yield {"event": "tool_start", "tool": name, "arguments": args, "thought": call.get("thought", "")}
                 outcome = await _dispatch(name, args)
                 outcome = dict(outcome)
@@ -229,9 +259,18 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                     "output": str(outcome.get("output", ""))[:20000],
                 }
                 yield {"event": "changes", "changes": collector.snapshot()}
+                if outcome.get("stop_task"):
+                    stopped = True
+                    stop_detail = str(args.get("reason") or outcome.get("reason") or "").strip()
+                    break
 
             messages.append({"role": "user", "content": _format_results(results)})
             yield {"event": "round_done", "index": round_index, "calls": total_calls, "elapsed_ms": int((time.time() - started) * 1000)}
+            if stopped:
+                stop_reason = "stopped"
+                yield {"event": "stopped", "reason": stop_detail,
+                       "message": "模型已调用 `stop` 结束本次任务。" + (" 说明: " + stop_detail if stop_detail else "")}
+                break
         else:
             stop_reason = "max_rounds"
             yield {"event": "limit", "message": "已达到最大交互轮数 {0}，请让用户继续追问。".format(max_rounds)}
@@ -239,6 +278,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
     yield {
         "event": "end",
         "reason": stop_reason,
+        "detail": stop_detail,
         "calls": total_calls,
         "changes": collector.snapshot(),
         "elapsed_ms": int((time.time() - started) * 1000),

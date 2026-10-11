@@ -37,7 +37,8 @@ agents/
 ├─ skill_loader.py      skills/ 目录加载
 ├─ tools/               工具目录：每个工具一个文件夹
 │  ├─ read_file/  ├─ write_file/  ├─ edit_file/
-│  └─ list_dir/  ├─ search_files/  ├─ run_shell/
+│  ├─ list_dir/  ├─ search_files/  ├─ run_shell/
+│  └─ stop/                 结束信号工具（模型显式结束本次任务）
 ├─ skills/              技能目录：一个技能一个 md 文件
 ├─ web/                 纯展示前端（登录引导 / 对话 / 设置）
 └─ config.json          所有配置
@@ -106,6 +107,16 @@ def run(path: str) -> str:
 - 一次回复允许输出多个 JSON，后端会依次执行
 - 非工具调用的花括号必须转义为 `/{` 与 `/}`，后端会自动还原
 - 允许在 JSON 之前输出描述性文字
+
+## 结束协议
+
+模型必须在任务真正完成时调用内置工具 `stop` 显式结束本次任务（`stop` 不受调用次数与禁用列表约束，且不计入次数）：
+
+```
+{"tool": "stop", "arguments": {"reason": "已完成 README 更新"}}
+```
+
+若某一轮模型没有调用任何工具，运行时会回灌一条指令要求继续推进；连续 3 轮空转才会强制结束，避免死循环。
 
 ## MCP
 
