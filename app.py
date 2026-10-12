@@ -286,7 +286,7 @@ async def api_fetch_models(pid: str, request: Request, payload: dict = Body(defa
     try:
         models = await ai_client.fetch_models(provider)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail="获取模型列表失败，请检查提供商配置") from exc
 
     def _mutate(cfg):
         for item in cfg["providers"]:
@@ -312,7 +312,7 @@ async def api_test_provider(pid: str, request: Request, payload: dict = Body(def
     try:
         return await ai_client.test_provider(provider)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail="提供商连接测试失败，请检查 API 地址和密钥") from exc
 
 
 @app.post("/api/providers/{pid}/select")
