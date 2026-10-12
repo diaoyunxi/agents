@@ -49,16 +49,25 @@ def run(pattern: str, path: str = ".", glob: str | None = None, regex: bool = Fa
             if not item.is_file() or any(part in SKIP_DIRS for part in item.parts):
                 continue
             rel = relative(item)
-            if matcher is None and needle in item.name.lower():
-                name_hits.append(f"  {rel}")
-            if matcher is None and not ignore_case and needle in item.name:
-                name_hits.append(f"  {rel}")
+            if matcher is None:
+                # 非正则模式：按 ignore_case 决定是否对文件名做大小写归一
+                if ignore_case:
+                    if needle in item.name.lower():
+                        name_hits.append(f"  {rel}")
+                elif pattern in item.name:
+                    name_hits.append(f"  {rel}")
             try:
                 text = read_text(item)
             except Exception:  # noqa: BLE001
                 continue
             for idx, line in enumerate(text.splitlines(), 1):
-                matched = matcher.search(line) if matcher else (needle in line.lower())
+                if matcher:
+                    matched = matcher.search(line)
+                elif ignore_case:
+                    matched = needle in line.lower()
+                else:
+                    # 大小写敏感：两边都不要做归一化
+                    matched = pattern in line
                 if matched:
                     hits.append(f"  {rel}:{idx}: {line.strip()[:200]}")
                     if len(hits) >= max_results:
