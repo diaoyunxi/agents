@@ -249,24 +249,22 @@ def start_update(delay: float = 2.0) -> dict:
         "--port", str(_server_port()),
         "--delay", str(delay),
     ]
-    log_handle = open(LOG_FILE, "a", encoding="utf-8")
-    log_handle.write("\n===== {} 触发更新 (old_pid={}) =====\n".format(
-        time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid()))
-    log_handle.flush()
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(BASE_DIR),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            creationflags=_detach_flags(),
-        )
-    except Exception as exc:  # noqa: BLE001
-        _updating = False
-        log_handle.close()
-        return {"ok": False, "message": "启动更新进程失败：{}".format(exc)}
-    log_handle.close()
+    with open(LOG_FILE, "a", encoding="utf-8") as log_handle:
+        log_handle.write("\n===== {} 触发更新 (old_pid={}) =====\n".format(
+            time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid()))
+        log_handle.flush()
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(BASE_DIR),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=_detach_flags(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _updating = False
+            return {"ok": False, "message": "启动更新进程失败：{}".format(exc)}
     return {"ok": True, "message": "已启动更新进程", "updater_pid": proc.pid}
 
 
