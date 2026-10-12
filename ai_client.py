@@ -144,8 +144,8 @@ async def stream_chat(provider, model, messages, tools=None):
     finish = None
     tool_calls = []
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(_timeout(), connect=30)) as client:
-        async with client.stream("POST", url, headers=_headers(provider), json=payload) as resp:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(_timeout(), connect=30)) as client, \
+             client.stream("POST", url, headers=_headers(provider), json=payload) as resp:
             if resp.status_code >= 400:
                 body = (await resp.aread()).decode("utf-8", errors="replace")
                 raise ValueError("模型请求失败 HTTP {0}: {1}".format(resp.status_code, body[:500]))
