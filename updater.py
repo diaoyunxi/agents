@@ -156,10 +156,12 @@ def _update_code(cwd: Path, log_path: Path) -> tuple[bool, str]:
 
 def _wait_http(port: int, timeout: float) -> bool:
     url = "http://127.0.0.1:{}/api/health".format(port)
+    # URL 由本函数硬编码构造，scheme 恒为 http，无 file:// 注入风险
+    assert url.startswith("http://"), f"拒绝非 HTTP URL: {url}"  # noqa: S101
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=2) as resp:
+            with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
                 if resp.status == 200:
                     return True
         except Exception:  # noqa: BLE001
