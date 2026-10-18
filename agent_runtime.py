@@ -14,6 +14,7 @@ import uuid
 import ai_client
 import config
 import function_tools
+import interaction
 import mcp_manager
 import prompt_builder
 import tool_parser
@@ -82,6 +83,26 @@ PARSE_ERROR_GUIDE = (
 )
 
 
+def _tool_message(tool_call_id: str, output: str, images: list) -> dict:
+    """组装回灌给模型的 tool 消息；带图片时用多模态 content 数组。"""
+
+    text = str(output or "")[:20000]
+    if images:
+        parts: list = [{"type": "text", "text": text}]
+        for img in images[:4]:
+            url = f"data:{img.get('media_type', 'image/png')};base64,{img.get('data', '')}"
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        return {"role": "tool", "tool_call_id": tool_call_id, "content": parts}
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": text}
+
+
+async def _ask_and_wait(outcome: dict) -> str:
+    """ask_followup_question：挂起等待用户回答，返回回答文本。"""
+
+    question = outcome.get("question") or {}
+    return await interaction.wait(question.get("id", ""), int(question.get("timeout", 600)))
+
+
 def _format_results(results: list) -> str:
     lines = ["[工具执行结果]"]
     has_parse_error = False
@@ -93,6 +114,9 @@ def _format_results(results: list) -> str:
         lines.append("- 工具 `{0}`：{1}".format(item["tool"], flag))
         lines.append("  参数: {0}".format(json.dumps(item.get("arguments", {}), ensure_ascii=False)[:500]))
         lines.append("  输出: {0}".format(str(item.get("output", ""))[:6000]))
+        for img in (item.get("images") or [])[:1]:
+            lines.append("  图片: {0}（已读取；正文调用协议无法回灌图像，"
+                         "如需模型查看请改用函数调用或描述关键内容）".format(img.get("media_type", "image")))
     if has_parse_error:
         lines.append("注意：上述工具调用因为 JSON 不合法而**没有被执行**，请修正格式后重发。")
         lines.append(PARSE_ERROR_GUIDE)
@@ -261,6 +285,14 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                     outcome = dict(outcome)
                     outcome["tool"] = name
                     outcome["arguments"] = args
+
+                    # 交互式提问：先推送问题卡片，再挂起等待用户点击选项
+                    if outcome.get("question"):
+                        question = outcome["question"]
+                        yield {"event": "question", "tool": name, "question": question}
+                        answer = await _ask_and_wait(outcome)
+                        outcome["output"] = "用户的选择: {0}".format(answer)
+
                     yield {
                         "event": "tool_end",
                         "tool": name,
@@ -269,11 +301,8 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                         "output": str(outcome.get("output", ""))[:20000],
                     }
                     yield {"event": "changes", "changes": collector.snapshot()}
-                    tool_messages.append({
-                        "role": "tool",
-                        "tool_call_id": nc["id"],
-                        "content": str(outcome.get("output", ""))[:20000],
-                    })
+                    tool_messages.append(_tool_message(
+                        nc["id"], outcome.get("output", ""), outcome.get("images") or []))
                     if outcome.get("stop_task"):
                         stopped = True
                         stop_detail = str(args.get("reason") or outcome.get("reason") or "").strip()
@@ -358,6 +387,14 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 if call.get("repaired"):
                     outcome["output"] = "（你输出的 JSON 格式有误，已自动修复后执行；下次请严格合法）\n{0}".format(
                         outcome.get("output", ""))
+
+                # 交互式提问：推送问题卡片并挂起等待用户回答
+                if outcome.get("question"):
+                    question = outcome["question"]
+                    yield {"event": "question", "tool": name, "question": question}
+                    answer = await _ask_and_wait(outcome)
+                    outcome["output"] = "用户的选择: {0}".format(answer)
+
                 results.append(outcome)
                 yield {
                     "event": "tool_end",
@@ -382,6 +419,9 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
         else:
             stop_reason = "max_rounds"
             yield {"event": "limit", "message": "已达到最大交互轮数 {0}，请让用户继续追问。".format(max_rounds)}
+
+    # 对话结束：唤醒所有仍挂起的提问，避免工具永远等待
+    interaction.cancel_all("对话已结束")
 
     yield {
         "event": "end",

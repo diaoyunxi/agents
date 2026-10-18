@@ -179,6 +179,93 @@ function addToolBlock(call) {
   return rec;
 }
 
+/* ---------- 交互式提问（ask_followup_question） ---------- */
+function addQuestionBlock(ev) {
+  if (!cur) return;
+  const q = ev.question || {};
+  const box = el('div', 'call question');
+  const head = el('div', 'call-head');
+  head.appendChild(el('span', 'tag', '提问'));
+  head.appendChild(el('span', 'nm', ev.tool || 'ask_followup_question'));
+  head.appendChild(el('span', 'grow'));
+  const state = el('span', 'badge blue', '等待回答');
+  head.appendChild(state);
+  box.appendChild(head);
+
+  const body = el('div', 'question-body');
+  body.appendChild(el('div', 'question-text', q.question || ''));
+  const opts = el('div', 'question-options');
+  const chosen = [];
+
+  function submit(labels) {
+    if (box.dataset.done) return;
+    box.dataset.done = '1';
+    state.textContent = '提交中';
+    state.className = 'badge grey';
+    api('/api/question/' + encodeURIComponent(q.id || ''),
+      { body: { answer: labels.length === 1 ? labels[0] : labels } })
+      .then(function () {
+        state.textContent = '已回答';
+        state.className = 'badge green';
+        box.classList.add('answered');
+        Array.prototype.forEach.call(opts.querySelectorAll('.q-opt'), function (b) { b.disabled = true; });
+        const sub = body.querySelector('.q-submit');
+        if (sub) sub.disabled = true;
+      })
+      .catch(function (err) {
+        box.dataset.done = '';
+        state.textContent = '回答失败';
+        state.className = 'badge orange';
+        toast(err.message || '回答失败', 'err');
+      });
+  }
+
+  (q.options || []).forEach(function (o) {
+    const label = typeof o === 'string' ? o : (o.label || '');
+    const desc = typeof o === 'string' ? '' : (o.description || '');
+    if (!label) return;
+    const btn = el('button', 'q-opt', label);
+    btn.type = 'button';
+    if (desc) btn.title = desc;
+    btn.onclick = function () {
+      if (box.dataset.done) return;
+      if (q.multi_select) {
+        btn.classList.toggle('picked');
+        const idx = chosen.indexOf(label);
+        if (idx >= 0) chosen.splice(idx, 1); else chosen.push(label);
+      } else {
+        submit([label]);
+      }
+    };
+    opts.appendChild(btn);
+  });
+  body.appendChild(opts);
+
+  if (q.multi_select) {
+    const submitBtn = el('button', 'q-submit', '提交选择');
+    submitBtn.type = 'button';
+    submitBtn.onclick = function () {
+      if (box.dataset.done || !chosen.length) { toast('请先选择至少一个选项', 'err'); return; }
+      submit(chosen.slice());
+    };
+    body.appendChild(submitBtn);
+  }
+
+  box.appendChild(body);
+  (cur.roundBox || cur.content).appendChild(box);
+  scrollDown();
+}
+
+function expireQuestions() {
+  Array.prototype.forEach.call(document.querySelectorAll('.call.question'), function (box) {
+    if (box.dataset.done) return;
+    box.dataset.done = '1';
+    const badge = box.querySelector('.badge');
+    if (badge) { badge.textContent = '已结束'; badge.className = 'badge grey'; }
+    Array.prototype.forEach.call(box.querySelectorAll('.q-opt'), function (b) { b.disabled = true; });
+  });
+}
+
 /* ---------- 文件变更面板 ---------- */
 const ACTION_LABEL = { create: '新建', modify: '修改', delete: '删除' };
 
@@ -417,6 +504,9 @@ function handle(ev) {
       }
       break;
     }
+    case 'question':
+      addQuestionBlock(ev);
+      break;
     case 'changes':
       renderChanges(ev.changes || []);
       break;
@@ -434,6 +524,7 @@ function handle(ev) {
       break;
     case 'end': {
       if (ev.changes) renderChanges(ev.changes);
+      expireQuestions();
       const reasonText = { stopped: '模型主动结束', idle: '未推进而结束',
         max_rounds: '达到轮数上限', parse_failed: '解析失败结束',
         error: '出错结束', completed: '完成' }[ev.reason] || ev.reason || '完成';

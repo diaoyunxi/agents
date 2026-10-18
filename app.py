@@ -19,6 +19,7 @@ import agent_runtime
 import ai_client
 import config
 import git_update
+import interaction
 import mcp_manager
 import prompt_builder
 import skill_loader
@@ -470,12 +471,39 @@ async def api_chat(request: Request, payload: dict = Body(...)):
         except Exception as exc:  # noqa: BLE001
             yield "data: " + json.dumps({"event": "error", "message": str(exc)}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"event": "end", "reason": "error"}, ensure_ascii=False) + "\n\n"
+        finally:
+            # 客户端断开或流程结束：唤醒所有仍挂起的提问，避免工具永远等待
+            interaction.cancel_all("对话流已关闭")
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+@app.post("/api/question/{qid}/answer")
+async def api_answer_question(qid: str, request: Request, payload: dict = Body(...)):
+    """回答 ask_followup_question 提出的问题（多选时 answer 为字符串数组）。"""
+
+    require_auth(request)
+    item = interaction.get(qid)
+    if item is None:
+        raise HTTPException(status_code=404, detail="问题不存在或已过期")
+    if item.get("answered"):
+        raise HTTPException(status_code=409, detail="该问题已回答")
+    answer = payload.get("answer")
+    if item.get("multi_select"):
+        if not isinstance(answer, list) or not answer:
+            raise HTTPException(status_code=400, detail="该问题为多选，answer 需为非空数组")
+        answer = [str(a) for a in answer]
+    else:
+        answer = str(answer or "").strip()
+        if not answer:
+            raise HTTPException(status_code=400, detail="answer 不能为空")
+    if not interaction.resolve(qid, answer):
+        raise HTTPException(status_code=409, detail="该问题已回答或已关闭")
+    return {"ok": True, "answer": answer}
 
 
 # --------------------------------------------------------------------------- #

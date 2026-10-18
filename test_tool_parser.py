@@ -23,7 +23,7 @@ def check(name, cond, detail=""):
 
 print("### A) 完整 JSON + content 内裸引号（用户场景）")
 full = (
-    '{"tool": "write_file",\n'
+    '{"tool": "write_to_file",\n'
     '\n'
     '"arguments": {"path": "_tmp_patch.py", "content": "from pathlib import Path\\n'
     'msg = \\"hello world\\"\\n'
@@ -32,25 +32,25 @@ full = (
 )
 seg = tp.parse_segments(full)[0]
 check("解析为 tool_call", seg["type"] == "tool_call", seg.get("error", ""))
-check("工具名 write_file", seg.get("tool") == "write_file")
+check("工具名 write_to_file", seg.get("tool") == "write_to_file")
 check("content 完整还原", seg["arguments"]["content"] ==
       'from pathlib import Path\nmsg = "hello world"\n'
       'tip = "（运行时提醒）你上一轮没有调用任何工具。请继续推进任务："\nidle_streak += 1',
       repr(seg["arguments"]["content"]))
 
 print("### B) 裸引号导致括号错配（原始根因：看起来闭合却被判未闭合）")
-b1 = '{"tool": "write_file", "arguments": {"content": "x = \\"a\\" y"}}'
+b1 = '{"tool": "write_to_file", "arguments": {"content": "x = \\"a\\" y"}}'
 seg = tp.parse_segments(b1)[0]
 check("裸引号不破坏边界", seg["type"] == "tool_call", seg.get("error", ""))
 
 print("### C) content 内多个裸引号对")
-b2 = '{"tool": "write_file", "arguments": {"content": "a = "x" b = "y" done"}}'
+b2 = '{"tool": "write_to_file", "arguments": {"content": "a = "x" b = "y" done"}}'
 seg = tp.parse_segments(b2)[0]
 check("多对裸引号", seg["type"] == "tool_call" and seg["arguments"]["content"] == 'a = "x" b = "y" done',
       repr(seg.get("arguments", {}).get("content")) or seg.get("error", ""))
 
 print("### D) 真截断仍报错，不做过度修复")
-trunc = '{"tool": "write_file", "arguments": {"content": "abc'
+trunc = '{"tool": "write_to_file", "arguments": {"content": "abc'
 seg = tp.parse_segments(trunc)[0]
 check("截断 -> tool_call_error", seg["type"] == "tool_call_error", seg["error"])
 
@@ -76,7 +76,7 @@ check("散文还原", len(segs) == 1 and segs[0]["type"] == "text"
       and segs[0]["content"] == '说明：{} 与 { } 都不是工具调用。', repr(segs[0].get("content")))
 
 print("### H) 长文本 + 多处裸引号")
-big = ('前言段落。' * 2000) + '{"tool": "write_file", "arguments": {"content": "' \
+big = ('前言段落。' * 2000) + '{"tool": "write_to_file", "arguments": {"content": "' \
       + '\\n'.join(['line %d with "quoted" text' % i for i in range(20)]) + '"}}'
 t0 = time.time()
 segs = tp.parse_segments(big)

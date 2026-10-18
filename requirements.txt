@@ -6,3 +6,5 @@ python-multipart>=0.0.9
 mcp>=1.2.0
 # computer_use 工具（Windows UI Automation）：仅 Windows 需要
 comtypes>=1.2.0; sys_platform == "win32"
+# read_file 工具：图片缩放与格式归一化（缺失时图片原样返回）
+Pillow>=10.0.0

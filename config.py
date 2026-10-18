@@ -47,6 +47,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_confirmation": [],
     },
     "mcp_servers": [],
+    "web_search": {
+        "provider": "duckduckgo",
+        "api_key": "",
+        "max_results": 8,
+        "timeout": 20,
+    },
     "ui": {"theme": "dark"},
 }
 
@@ -255,5 +261,9 @@ def public_config(include_secrets: bool = False) -> dict[str, Any]:
         server.pop("env", None)
         for item in server.get("headers", {}).keys():
             server["headers"][item] = "***"
+    ws = config.get("web_search", {})
+    if ws.get("api_key"):
+        ws["api_key"] = ""
+        ws["has_api_key"] = True
     config["auth"].pop("password", None)
     return config

@@ -38,8 +38,12 @@ agents/
 ├─ updater.py           独立的自更新重启器（负责拉代码并重新拉起服务）
 ├─ skill_loader.py      skills/ 目录加载
 ├─ tools/               工具目录：每个工具一个文件夹
-│  ├─ read_file/  ├─ write_file/  ├─ edit_file/
-│  ├─ list_dir/  ├─ search_files/  ├─ run_shell/
+│  ├─ read_file/  ├─ write_to_file/  ├─ replace_in_file/
+│  ├─ delete_file/  ├─ list_dir/  ├─ search_file/
+│  ├─ search_content/  ├─ execute_command/
+│  ├─ todo_write/  ├─ task/  ├─ ask_followup_question/
+│  ├─ send_message/  ├─ read_rules/  ├─ update_memory/
+│  ├─ preview_url/  ├─ web_fetch/  ├─ web_search/
 │  └─ stop/                 结束信号工具（模型显式结束本次任务）
 ├─ skills/              技能目录：一个技能一个 md 文件
 ├─ web/                 纯展示前端（登录引导 / 对话 / 设置）
@@ -76,6 +80,31 @@ agents/
 | `ai` | `active_provider_id`、`active_model`、`max_tokens`、`temperature`、`timeout` |
 | `tool_limits` | 工具调用限制：`enabled`、`max_calls_per_round`、`max_total_calls`、`max_rounds`、`allowed_tools`、`denied_tools`、`require_confirmation` |
 | `mcp_servers` | MCP 服务器：`name`、`command`、`args`、`env`、`cwd`、`enabled` |
+| `web_search` | 联网搜索：`provider`（duckduckgo/brave/tavily）、`api_key`、`max_results`、`timeout` |
+
+## 内置工具
+
+| 工具 | 用途 |
+| --- | --- |
+| `list_dir` | 列出目录内容（可递归、可按扩展名/通配符过滤） |
+| `search_file` | 按通配符模式递归搜索文件/目录名 |
+| `search_content` | 基于 ripgrep 的文件内容搜索（无 rg 时用内置引擎，尊重 .gitignore） |
+| `read_file` | 读取本地文件（文本带行号；图片以图像内容返回给多模态模型） |
+| `replace_in_file` | 精确文本替换编辑文件 |
+| `write_to_file` | 写入/覆盖整个文件 |
+| `delete_file` | 删除文件 |
+| `execute_command` | 执行 Shell/PowerShell 命令（高风险，可禁用） |
+| `todo_write` | 创建/管理任务清单 |
+| `task` | 启动子代理（内置 code-explorer，用于代码库探索） |
+| `send_message` | 团队模式下向队友发消息 |
+| `ask_followup_question` | 向用户提出结构化选择题并等待回答 |
+| `read_rules` | 加载可请求的工作区/用户规则（`.agents/rules/*.md`） |
+| `update_memory` | 写入/更新/删除持久化记忆（`.memory/knowledge.json`） |
+| `preview_url` | 在本机默认浏览器预览 URL |
+| `web_fetch` | 抓取网页内容并转换为 Markdown |
+| `web_search` | 联网搜索（默认 DuckDuckGo，可配置 Brave/Tavily） |
+| `stop` | 结束信号工具（模型显式结束本次任务） |
+| `computer_use` | Windows 桌面操控（无障碍树优先，仅 Windows） |
 
 ## 添加一个工具
 
@@ -103,6 +132,8 @@ def run(path: str) -> str:
 ```
 
 返回 `dict` 时可用 `{"ok": False, "output": "错误原因"}` 告知模型失败原因。
+`run` 可以是 `async` 函数（如 `ask_followup_question` 需要挂起等待用户回答）；
+返回 dict 里带 `images: [{"media_type": ..., "data": base64}]` 时会以多模态内容回灌给模型。
 
 ## 添加一个技能
 
@@ -138,5 +169,5 @@ def run(path: str) -> str:
 
 - 密码登录后才可访问 API，密码以明文存于本机 `config.json`，请勿提交到版本库
 - 所有文件读写都被限制在 `server.workspace` 之内，越界路径会被拒绝
-- `run_shell` 属于高风险工具，可在设置页的「禁用列表」中关闭
+- `execute_command` 属于高风险工具，可在设置页的「禁用列表」中关闭
 

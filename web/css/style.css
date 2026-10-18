@@ -430,6 +430,39 @@ label > .label {
 .call-body.args { color: var(--text-dim); }
 .call-foot { display: flex; gap: 8px; align-items: center; padding: 8px 13px; border-top: 1px solid var(--line-soft); }
 
+/* 交互式提问卡片 */
+.call.question { border-color: rgba(106, 155, 204, .45); background: rgba(106, 155, 204, .06); }
+.call.question .call-head .nm { color: var(--blue); }
+.call.question.answered { border-color: rgba(120, 140, 93, .45); background: rgba(120, 140, 93, .06); }
+.question-body { padding: 10px 13px 12px; display: flex; flex-direction: column; gap: 10px; }
+.question-text { font-size: 14px; line-height: 1.6; }
+.question-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.q-opt {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.q-opt:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.q-opt.picked { border-color: var(--blue); background: rgba(106, 155, 204, .14); color: #3d6d9f; }
+.q-opt:disabled { opacity: .55; cursor: not-allowed; }
+.q-submit {
+  align-self: flex-start;
+  border: none;
+  background: var(--blue);
+  color: #fff;
+  border-radius: var(--radius);
+  padding: 7px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.q-submit:hover { filter: brightness(1.06); }
+.q-submit:disabled { opacity: .55; cursor: not-allowed; }
+
 /* 输入区 */
 .composer { border-top: 1px solid var(--line); background: var(--surface); padding: 16px 32px 18px; }
 .composer-inner { max-width: 880px; margin: 0 auto; }

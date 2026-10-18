@@ -1,4 +1,4 @@
-"""在工作区中执行 shell 命令。"""
+"""在工作区中执行 Shell / PowerShell 命令。"""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from pathlib import Path
 
 from common import SandboxError, workspace_dir
 
-NAME = "run_shell"
+NAME = "execute_command"
 DANGEROUS = True
-DESCRIPTION = "在工作区目录中执行一条 shell 命令并返回输出（用于 git、pip、测试等）"
+DESCRIPTION = "在工作区目录中执行一条 Shell/PowerShell 命令并返回输出（用于 git、pip、测试、构建等）"
 PARAMETERS = {
     "type": "object",
     "properties": {
@@ -25,7 +25,7 @@ BLOCKED = ["rm -rf /", "rm -rf ~", "format ", "shutdown", "mkfs", "del /f /s /q 
 
 
 def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
-    if not command.strip():
+    if not command or not command.strip():
         return {"ok": False, "output": "命令为空"}
     low = command.lower()
     for bad in BLOCKED:
@@ -38,6 +38,8 @@ def run(command: str, timeout: int = 120, cwd: str | None = None) -> dict:
         work_dir.relative_to(root)
     except ValueError as exc:
         raise SandboxError(f"工作目录 {work_dir} 超出工作区") from exc
+    if not work_dir.is_dir():
+        return {"ok": False, "output": f"工作目录不存在: {work_dir}"}
 
     timeout = max(5, min(int(timeout or 120), 600))
     try:
