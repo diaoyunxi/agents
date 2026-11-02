@@ -19,6 +19,10 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 BACKUP_DIR = BASE_DIR / ".config_backups"
 
+# 历史上被当作默认口令使用的弱值；检测到这些值时强制轮换，
+# 避免「只判空」漏掉存量部署里残留的 root/root。
+_KNOWN_WEAK_PASSWORDS = {"root", "admin", "password", "passw0rd", "123456", "changeme", "12345678"}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 6573, "workspace": "."},
     "auth": {
@@ -106,7 +110,10 @@ def ensure_credentials() -> dict[str, Any]:
 
     cfg = load()
     auth = cfg.get("auth", {})
-    if not auth.get("password"):
+    stored = str(auth.get("password") or "")
+    # 存量部署的 config.json 里 password 仍是历史默认弱口令（例如 "root"），
+    # 此时「非空」并不代表安全，只判空会跳过轮换。故一并识别已知弱口令。
+    if not stored or stored.lower() in _KNOWN_WEAK_PASSWORDS:
         generated = secrets.token_urlsafe(16)
         cfg = update(lambda c: c.setdefault("auth", {}).update({"password": generated}) or None)
     return cfg
