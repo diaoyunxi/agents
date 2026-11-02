@@ -73,9 +73,17 @@ async def api_login(payload: dict = Body(...)):
         token = _new_token()
         _sessions[token] = {"ts": time.time()}
         return {"ok": True, "token": token, "username": "guest"}
+    exp_user = str(cfg.get("username") or "")
+    exp_pass = str(cfg.get("password") or "")
+    if not exp_pass:
+        # 配置中不存在可用口令。本 PR 把 DEFAULT_CONFIG 的 password 改为空串后，
+        # 原先的 cfg.get("password", "root") 会取到空串而非 "root"，于是提交
+        # 空密码即可登入管理员（典型触发路径：绕过 main() 用 uvicorn/gunicorn
+        # 直接加载 app，使 ensure_credentials() 从未执行）。此处必须 fail closed。
+        raise HTTPException(status_code=503, detail="服务端尚未初始化登录口令，请通过 python main.py 完成初始化")
     username = str(payload.get("username", ""))
     password = str(payload.get("password", ""))
-    if username != cfg.get("username", "root") or password != cfg.get("password", "root"):
+    if not (secrets.compare_digest(username, exp_user) and secrets.compare_digest(password, exp_pass)):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = _new_token()
     _sessions[token] = {"ts": time.time()}
