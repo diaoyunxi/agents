@@ -280,7 +280,7 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                             continue
                         total_calls += 1
                         round_calls += 1
-                    yield {"event": "tool_start", "tool": name, "arguments": args, "thought": ""}
+                    yield {"event": "tool_start", "tool": name, "arguments": args, "thought": "", "tool_call_id": nc["id"]}
                     outcome = await _dispatch(name, args)
                     outcome = dict(outcome)
                     outcome["tool"] = name

@@ -579,11 +579,18 @@ async def api_update_conversation(cid: str, request: Request, payload: dict = Bo
     if "workspace" in payload:
         data["workspace"] = str(payload.get("workspace") or "").strip()
     if "messages" in payload:
-        data["messages"] = [
-            {"role": m.get("role"), "content": str(m.get("content", ""))}
-            for m in (payload["messages"] or [])
-            if m.get("role") in ("user", "assistant")
-        ]
+        # 支持完整消息结构：保留 tool_calls、tool_result 等字段
+        new_msgs = []
+        for m in (payload["messages"] or []):
+            role = m.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            entry = {"role": role, "content": str(m.get("content", ""))}
+            # 保留原生 function calling 的工具调用信息
+            if "tool_calls" in m and m["tool_calls"]:
+                entry["tool_calls"] = m["tool_calls"]
+            new_msgs.append(entry)
+        data["messages"] = new_msgs
     data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"conversation": data}

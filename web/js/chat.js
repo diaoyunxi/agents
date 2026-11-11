@@ -7,6 +7,7 @@ const history = [];
 let controller = null;
 let cur = null;
 let lastChangeKey = '';
+let saveTimer = null; // 定期保存定时器
 
 /* ---------- 会话管理 ---------- */
 let currentConvId = null;
@@ -146,7 +147,8 @@ function newAssistant() {
   threadInner.appendChild(turn);
   scrollDown();
   return { turn, head, modelBadge, reasoning, reasonBody, content, tail, roundBox: null,
-    answerCur: null, reasonText: '', live: '', round: 0, blocks: [], raw: '' };
+    answerCur: null, reasonText: '', live: '', round: 0, blocks: [], raw: '',
+    _toolCalls: [], _pendingToolResults: [] };
 }
 
 function addToolBlock(call) {
@@ -432,6 +434,66 @@ async function saveConversation() {
   } catch (err) { /* 静默保存失败 */ }
 }
 
+// 收集当前 assistant 消息的完整结构（含 tool_calls 和 tool_results）
+function saveAssistantMessage() {
+  if (!cur || !cur.raw) return;
+  // 找到 history 中最后一条 assistant 消息并更新它
+  let lastAssistantIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === 'assistant') {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  const msg = { role: 'assistant', content: cur.raw };
+  // 如果有工具调用记录，追加到消息中
+  if (cur._toolCalls && cur._toolCalls.length > 0) {
+    msg.tool_calls = cur._toolCalls;
+  }
+  if (cur._pendingToolResults && cur._pendingToolResults.length > 0) {
+    // 按 tool_call_id 配对
+    msg.tool_results = cur._pendingToolResults.map(r => ({
+      tool_call_id: r.tool_call_id,
+      tool: r.tool,
+      output: r.output,
+      ok: r.ok
+    }));
+  }
+  if (lastAssistantIdx >= 0) {
+    history[lastAssistantIdx] = msg;
+  } else {
+    history.push(msg);
+  }
+  // 清空暂存
+  cur._toolCalls = [];
+  cur._pendingToolResults = [];
+  // 立即保存
+  saveConversation();
+}
+
+// 定期保存（每 30 秒）
+function startPeriodicSave() {
+  stopPeriodicSave();
+  saveTimer = setInterval(function() {
+    if (controller) saveConversation();
+  }, 30000);
+}
+
+function stopPeriodicSave() {
+  if (saveTimer) {
+    clearInterval(saveTimer);
+    saveTimer = null;
+  }
+}
+
+document.addEventListener('beforeunload', function(e) {
+  if (controller || history.length > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+    saveConversation();
+  }
+});
+
 document.getElementById('newChat').onclick = async function () {
   currentConvId = null;
   convTitle = '';
@@ -485,14 +547,19 @@ function handle(ev) {
       }
       target.innerHTML = html;
       cur.raw += (ev.raw || '');
+      // 开始新轮次时标记一轮结束，保存当前 assistant 消息
+      if (cur.round > 1) saveAssistantMessage();
       scrollDown();
       break;
     }
-    case 'parse_error':
-      toast('工具调用 JSON 解析失败：' + (ev.error || ''), 'err');
-      break;
     case 'tool_start':
       addToolBlock(ev);
+      // 记录工具调用信息，等待 tool_end 配对
+      const newBlk = cur.blocks[cur.blocks.length - 1];
+      if (newBlk && ev.tool_call_id) {
+        newBlk._callId = ev.tool_call_id;
+        cur._toolCalls.push({ id: ev.tool_call_id, name: ev.tool, arguments: ev.arguments || {} });
+      }
       break;
     case 'tool_end': {
       const blk = cur.blocks[cur.blocks.length - 1];
@@ -501,6 +568,13 @@ function handle(ev) {
         blk.state.className = 'badge ' + (ev.ok ? 'green' : 'orange');
         blk.out.textContent = ev.output || '(无输出)';
         if (!ev.ok) blk.box.classList.add('fail');
+        // 记录 tool_result 到待保存列表
+        (cur._pendingToolResults || (cur._pendingToolResults = [])).push({
+          tool_call_id: ev.tool_call_id || blk._callId,
+          tool: ev.tool,
+          output: ev.output || '',
+          ok: ev.ok
+        });
       }
       break;
     }
@@ -531,8 +605,8 @@ function handle(ev) {
       cur.tail.innerHTML += '<div class="hint" style="margin-top:12px">' + escapeHtml(reasonText) +
         ' · 轮次 ' + cur.round + ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' +
         (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
-      if (cur.raw) history.push({ role: 'assistant', content: cur.raw });
-      saveConversation();
+      // 保存完整的 assistant 消息（包含 tool_calls 和 tool_results）
+      saveAssistantMessage();
       break;
     }
   }
@@ -599,6 +673,7 @@ async function send() {
   } finally {
     controller = null;
     cur = null;
+    stopPeriodicSave(); // SSE 结束，停止定时器
     document.getElementById('send').style.display = 'inline-block';
     document.getElementById('stop').style.display = 'none';
     document.getElementById('status').textContent = '';
@@ -607,11 +682,10 @@ async function send() {
   }
 }
 
-document.getElementById('send').onclick = send;
-document.getElementById('stop').onclick = function () { if (controller) controller.abort(); };
-document.getElementById('input').addEventListener('keydown', function (e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-});
+document.getElementById('send').onclick = async function () {
+  startPeriodicSave();
+  await send();
+};
 
 loadModels().catch(err => toast(err.message, 'err'));
 refreshConversationList().catch(err => toast(err.message, 'err'));
