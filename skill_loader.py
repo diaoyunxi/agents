@@ -29,7 +29,8 @@ def _parse_meta(raw: str, name: str) -> dict:
     return meta
 
 
-def load_skills():
+def load_skills(names=None):
+    """加载技能。`names` 为 None 时加载全部；为列表时只返回名称命中且存在的技能。"""
     root = skills_dir()
     root.mkdir(parents=True, exist_ok=True)
     skills = []
@@ -48,11 +49,20 @@ def load_skills():
             "content": raw.strip(),
             "path": str(path),
         })
-    return skills
+    if names is None:
+        return skills
+    wanted = [n for n in (names or []) if n]
+    return [s for s in skills if s["name"] in wanted]
 
 
-def build_prompt_section() -> str:
-    skills = load_skills()
+def skill_names() -> list:
+    """返回所有已加载技能的名称（稳定排序）。"""
+    return [s["name"] for s in load_skills()]
+
+
+def build_prompt_section(names=None) -> str:
+    """组装技能文档。`names` 为 None 时包含全部技能；为列表（可为空）时只包含列出的技能。"""
+    skills = load_skills(None if names is None else names)
     if not skills:
         return ""
     parts = ["## 技能库（Skills）\n\n以下是本项目提供的技能文档。当任务与某个技能相关时，遵循对应技能的流程与约束。"]
