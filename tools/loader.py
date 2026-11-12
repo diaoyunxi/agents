@@ -84,6 +84,10 @@ def discover() -> dict[str, dict[str, Any]]:
                 print(f"[tools] 跳过 {name}: 未找到 run() 函数")
                 continue
             md = doc.read_text(encoding="utf-8")
+            # 按硬件/环境自动启用的能力门控：tools.py 可声明 REQUIRES = ["pkg:xxx", "cli:yyy", ...]
+            from capabilities import requires_satisfied
+
+            ok_cap, missing, reason = requires_satisfied(getattr(module, "REQUIRES", None))
             registry[name] = {
                 "name": getattr(module, "NAME", name),
                 "description": (getattr(module, "DESCRIPTION", "") or "").strip(),
@@ -92,7 +96,14 @@ def discover() -> dict[str, dict[str, Any]]:
                 "run": run,
                 "dangerous": bool(getattr(module, "DANGEROUS", False)),
                 "path": str(folder),
+                "requires": list(getattr(module, "REQUIRES", []) or []),
+                "capability_ok": ok_cap,
+                "capability_missing": missing,
+                "capability_reason": reason,
             }
+            if not ok_cap:
+                print(f"[tools] {name}: 因缺少能力而默认停用（{reason}），"
+                      f"可在设置页 tool_toggles 显式启用")
         except Exception as exc:  # noqa: BLE001
             print(f"[tools] 加载 {name} 失败: {exc}")
             traceback.print_exc()
@@ -110,6 +121,25 @@ def refresh() -> dict[str, dict[str, Any]]:
     return registry()
 
 
+def is_tool_enabled(name: str) -> bool:
+    """检查工具是否被允许。
+
+    优先级：
+      1. config.json 的 tool_toggles[name] 显式 true/false —— 用户手动覆盖，最高优先；
+      2. 未显式设置时，按「按硬件自动启用」：工具声明的 REQUIRES 能力不满足则自动停用，
+         满足则默认启用。
+    """
+    import config
+    toggles = config.get("tool_toggles", {}) or {}
+    if name in toggles:
+        return toggles.get(name, True) is not False
+    item = registry().get(name)
+    if item is None:
+        return True
+    # 未声明 REQUIRES 的工具默认可用；声明了则按能力自动启用/停用
+    return bool(item.get("capability_ok", True))
+
+
 def list_tools() -> list[dict[str, Any]]:
     return [
         {
@@ -117,10 +147,25 @@ def list_tools() -> list[dict[str, Any]]:
             "description": item["description"],
             "parameters": item["parameters"],
             "dangerous": item["dangerous"],
+            "enabled": is_tool_enabled(item["name"]),
+            "requires": item.get("requires", []),
+            "capability_ok": item.get("capability_ok", True),
+            "capability_missing": item.get("capability_missing", []),
             "doc": item["doc"],
         }
         for item in sorted(registry().values(), key=lambda x: x["name"])
     ]
+
+
+def list_enabled_tools() -> list[dict[str, Any]]:
+    """只返回当前启用的工具（用于 function calling schema 和提示词）。"""
+    return [t for t in list_tools() if t.get("enabled", True)]
+
+
+def get_custom_config() -> dict[str, Any]:
+    """读取 config.json 中的 custom 段，工具可据此自定义行为。"""
+    import config
+    return config.get("custom", {}) or {}
 
 
 def get_tool(name: str) -> dict[str, Any] | None:
@@ -148,9 +193,9 @@ def _json_schema_to_text(schema: dict[str, Any], indent: int = 0) -> str:
 
 
 def build_prompt_section() -> str:
-    """把每个工具的 tools.md 拼成 system 提示词中的「可用工具」章节。"""
+    """把每个工具的 tools.md 拼成 system 提示词中的「可用工具」章节（自动跳过被停用的工具）。"""
 
-    items = registry().values()
+    items = [item for item in registry().values() if is_tool_enabled(item["name"])]
     if not items:
         return ""
     chunks = []
@@ -173,6 +218,24 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
     item = get_tool(name)
     if item is None:
         return {"ok": False, "output": f"错误：不存在名为 `{name}` 的工具。可用工具：{', '.join(registry().keys())}"}
+
+    # 按硬件自动停用且用户未显式覆盖：给出清晰的安装/启用指引（含一键安装提示）
+    if not item.get("capability_ok", True) and not is_tool_enabled(name):
+        import config
+        toggles = config.get("tool_toggles", {}) or {}
+        if name not in toggles:
+            missing = list(item.get("capability_missing", []) or ["未知能力"])
+            pkg_tags = [m.split(":", 1)[1].strip() for m in missing
+                        if isinstance(m, str) and m.startswith("pkg:")]
+            other = [m for m in missing if not (isinstance(m, str) and m.startswith("pkg:"))]
+            hint = [f"工具 `{name}` 因本机缺少能力（{', '.join(missing)}）而自动停用。"]
+            if pkg_tags:
+                hint.append(f"可自动补齐：调用 `pip_install` 安装 {pkg_tags}，"
+                            f"或调用 `fix_capabilities`（批量补齐并刷新缓存）后重试。")
+            if other:
+                hint.append(f"其余能力（{', '.join(other)}）需手动安装对应 CLI/驱动。")
+            hint.append("也可到设置页 tool_toggles 手动启用。")
+            return {"ok": False, "output": "\n".join(hint)}
 
     run: Callable[..., Any] = item["run"]
     kwargs = arguments or {}
