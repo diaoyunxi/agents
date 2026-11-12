@@ -46,6 +46,13 @@ def _env() -> dict:
     return env
 
 
+def _no_window_flags() -> int:
+    """Windows 上子进程不创建控制台窗口，避免一闪而过的黑框。"""
+    if os.name == "nt":
+        return subprocess.CREATE_NO_WINDOW
+    return 0
+
+
 def _git(args: list[str], timeout: float = 30.0, cwd: Path | None = None) -> tuple[int, str, str]:
     """执行 git 命令，返回 (returncode, stdout, stderr)。"""
     try:
@@ -55,6 +62,7 @@ def _git(args: list[str], timeout: float = 30.0, cwd: Path | None = None) -> tup
             capture_output=True,
             timeout=timeout,
             env=_env(),
+            creationflags=_no_window_flags(),
         )
     except FileNotFoundError:
         return -1, "", "未找到 git 命令，请先安装 Git 并加入 PATH"

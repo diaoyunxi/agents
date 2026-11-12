@@ -51,6 +51,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allowed_tools": [],
         "require_confirmation": [],
     },
+    "tool_toggles": {},  # 工具允许开关：{工具名: true/false}；缺省视为启用
+    "custom": {},        # 自定义配置：任意键值，工具可通过 tools.get_custom_config() 读取
+    "custom_prompts": [],  # 用户自定义 Prompt：{id, name, content, enabled}
     "mcp_servers": [],
     "web_search": {
         "provider": "duckduckgo",

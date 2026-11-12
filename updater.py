@@ -48,11 +48,10 @@ def _log(path: Path, message: str) -> None:
         pass
 
 
-def _detach_flags() -> int:
+def _foreground_flags() -> int:
+    """Windows 上创建可见控制台（显式前台），Linux 上直接前台运行。"""
     if os.name == "nt":
-        return (subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP
-                | subprocess.CREATE_NO_WINDOW)
+        return subprocess.CREATE_NEW_CONSOLE
     return 0
 
 
@@ -111,9 +110,12 @@ def _run(cmd: list[str], cwd: Path, timeout: float) -> tuple[int, str]:
     for key, value in (("GIT_OPTIONAL_LOCKS", "0"), ("LANG", "C.UTF-8"), ("LC_ALL", "C.UTF-8")):
         if key not in env:
             env[key] = value
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.CREATE_NO_WINDOW
     try:
         proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True,
-                              timeout=timeout, env=env)
+                              timeout=timeout, env=env, creationflags=flags)
     except FileNotFoundError:
         return -1, "未找到命令：{}".format(cmd[0])
     except subprocess.TimeoutExpired:
@@ -173,7 +175,7 @@ def _wait_http(port: int, timeout: float) -> bool:
 
 
 def _launch(cwd: Path, log_path: Path) -> "subprocess.Popen[bytes]":
-    """拉起新的 Web 服务进程（同样以分离方式，确保其不受本进程退出影响）。"""
+    """拉起新的 Web 服务进程（Windows 上以可见控制台显式启动，Linux 前台运行）。"""
     env = dict(os.environ)
     env["AGENTS_NO_BROWSER"] = "1"       # 重启时不要再自动弹出浏览器
     env["AGENTS_UPDATED"] = "1"
@@ -187,7 +189,7 @@ def _launch(cwd: Path, log_path: Path) -> "subprocess.Popen[bytes]":
         stdout=handle,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        creationflags=_detach_flags(),
+        creationflags=_foreground_flags(),
     )
 
 

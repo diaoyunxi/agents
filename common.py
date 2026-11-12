@@ -158,6 +158,22 @@ def record_change(path: str | Path, action: str, before: str = "", after: str = 
         path=rel, action=action, language=lang, additions=add, deletions=dele,
         diff=diff, before=before, after=after,
     )
+    # 同一 path 已有记录时原地更新，避免重复条目；
+    # 保留该文件第一次的 before（原始状态），只更新 after，
+    # 使 diff 始终反映整轮累计净变化（如 create 后又 modify）。
+    existing = next((c for c in bucket if c.path == rel), None)
+    if existing is not None:
+        existing.action = action
+        existing.language = lang
+        existing.after = after
+        if action == "delete":
+            existing.diff, existing.additions, existing.deletions = _make_diff(rel, existing.before, "")
+        elif existing.before or existing.after:
+            existing.diff, existing.additions, existing.deletions = _make_diff(rel, existing.before, existing.after, lang)
+        else:
+            existing.diff, existing.additions, existing.deletions = "", 0, 0
+        existing.time = change.time
+        return existing
     bucket.append(change)
     return change
 

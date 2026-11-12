@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -188,7 +189,7 @@ async def api_get_config(request: Request):
 @app.put("/api/config")
 async def api_put_config(request: Request, payload: dict = Body(...)):
     require_auth(request)
-    allowed_top = {"auth", "ai", "tool_limits", "mcp_servers", "server", "ui"}
+    allowed_top = {"auth", "ai", "tool_limits", "tool_toggles", "mcp_servers", "server", "ui", "custom"}
 
     server_patch = (payload or {}).get("server")
     if isinstance(server_patch, dict) and "workspace" in server_patch:
@@ -205,7 +206,11 @@ async def api_put_config(request: Request, payload: dict = Body(...)):
     def _mutate(cfg):
         for key, value in (payload or {}).items():
             if key in allowed_top and isinstance(value, dict):
-                cfg.setdefault(key, {}).update(value)
+                # tool_toggles / custom 支持全量替换语义：前端可整体提交最新状态
+                if key in ("tool_toggles", "custom"):
+                    cfg[key] = value
+                else:
+                    cfg.setdefault(key, {}).update(value)
             elif key == "providers":
                 cfg["providers"] = value
     config.update(_mutate)
@@ -318,10 +323,54 @@ async def api_test_provider(pid: str, request: Request, payload: dict = Body(def
         if payload.get(key):
             provider[key] = payload[key]
     provider["base_url"] = ai_client.normalize_base_url(provider.get("base_url", ""))
+    # 若指定了 model，则按该模型类型做最小真实请求；否则回退到拉取模型列表
+    model = str(payload.get("model", "") or "").strip()
+    if model:
+        mtype = payload.get("model_type") or ai_client.model_type_of(provider, model)
+        try:
+            res = await ai_client.test_model_by_type(provider, model, mtype)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"ok": res.get("ok", False), "model": model, "model_type": res.get("type"),
+                "detail": res.get("detail"), "elapsed_ms": res.get("elapsed_ms")}
     try:
         return await ai_client.test_provider(provider)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/providers/{pid}/invoke")
+async def api_invoke_model(pid: str, request: Request, payload: dict = Body(...)):
+    """按模型类型执行一次推理（非流式），请求体见 ai_client.model_inference。
+
+    payload: {model, type?, ...按类型的字段}。type 缺省时用自动识别/覆盖。
+    音频输入接受 audio_b64 / audio（base64）；语音合成/生图返回 base64 与 MIME。
+    """
+    require_auth(request)
+    provider = dict(_find_provider(pid))
+    model = str(payload.get("model", "") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model 必填")
+    mtype = payload.get("type") or ai_client.model_type_of(provider, model)
+    if mtype not in ai_client.MODEL_TYPES:
+        raise HTTPException(status_code=400, detail="type 必须是 {0}".format("/".join(ai_client.MODEL_TYPES)))
+
+    call_payload = {k: v for k, v in payload.items() if k not in ("model", "type")}
+    try:
+        out = await ai_client.model_inference(provider, model, mtype, call_payload)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    result = out.get("result")
+    # 把二进制音频/图片转成 base64，便于 JSON 传输
+    if out["type"] == "text_to_speech" and isinstance(result, dict):
+        ab = result.get("audio_bytes")
+        if ab is not None:
+            result["audio_b64"] = base64.b64encode(ab).decode("ascii")
+            result.pop("audio_bytes", None)
+    return {"ok": True, "model": model, "type": out["type"], "result": result}
 
 
 @app.post("/api/providers/{pid}/select")
@@ -341,6 +390,34 @@ async def api_select_model(pid: str, request: Request, payload: dict = Body(...)
 
     config.update(_mutate)
     return {"ok": True, "model": model}
+
+
+@app.post("/api/providers/{pid}/models/type")
+async def api_set_model_type(pid: str, request: Request, payload: dict = Body(...)):
+    """手动覆盖某模型的类型（写入 provider.model_type_overrides）。
+
+    payload: {"model": "模型ID", "type": "text_embedding"}；type 传空串则清除覆盖、回到自动识别。
+    """
+    require_auth(request)
+    _find_provider(pid)
+    model = str(payload.get("model", "")).strip()
+    mtype = str(payload.get("type", "")).strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model 必填")
+    if mtype and mtype not in ai_client.MODEL_TYPES:
+        raise HTTPException(status_code=400, detail="type 必须是 {0}".format("/".join(ai_client.MODEL_TYPES)))
+
+    def _mutate(cfg):
+        for item in cfg["providers"]:
+            if item.get("id") == pid:
+                overrides = item.setdefault("model_type_overrides", {})
+                if mtype:
+                    overrides[model] = mtype
+                else:
+                    overrides.pop(model, None)
+
+    config.update(_mutate)
+    return {"ok": True, "model": model, "type": mtype or ai_client.detect_model_type(model)}
 
 
 @app.get("/api/models")
@@ -374,6 +451,37 @@ async def api_refresh_tools(request: Request):
     return {"ok": True, "tools": tool_loader.list_tools()}
 
 
+@app.post("/api/tools/toggle")
+async def api_toggle_tool(request: Request, payload: dict = Body(...)):
+    """允许/停用单个工具。payload: {name: str, enabled: bool}"""
+    require_auth(request)
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="工具名不能为空")
+    enabled = payload.get("enabled", True)
+
+    def _mutate(cfg):
+        cfg.setdefault("tool_toggles", {})[name] = bool(enabled)
+
+    config.update(_mutate)
+    return {"ok": True, "name": name, "enabled": bool(enabled)}
+
+
+@app.post("/api/tools/custom-config")
+async def api_custom_config(request: Request, payload: dict = Body(...)):
+    """保存自定义配置（全量替换 custom 段）。payload: {key: value, ...}"""
+    require_auth(request)
+    custom = payload.get("custom")
+    if not isinstance(custom, dict):
+        raise HTTPException(status_code=400, detail="payload 必须包含 'custom' 字段（对象）")
+
+    def _mutate(cfg):
+        cfg["custom"] = custom
+
+    config.update(_mutate)
+    return {"ok": True, "custom": custom}
+
+
 @app.get("/api/tools/{name}/doc")
 async def api_tool_doc(name: str, request: Request):
     require_auth(request)
@@ -384,9 +492,148 @@ async def api_tool_doc(name: str, request: Request):
 
 
 @app.get("/api/skills")
-async def api_skills(request: Request):
+async def api_skills(request: Request, slim: bool = False):
+    """slim=true 时只返回 name/description/when_to_use，供输入框 $ 选择器使用。"""
     require_auth(request)
-    return {"skills": skill_loader.load_skills()}
+    items = skill_loader.load_skills()
+    if slim:
+        items = [{"name": s["name"], "description": s["description"], "when_to_use": s["when_to_use"]} for s in items]
+    return {"skills": items}
+
+
+@app.get("/api/skill-select")
+async def api_skill_select(request: Request, text: str = "", provider_id: str = "", model: str = ""):
+    """预览：给定用户请求，独立选择请求将加载哪些技能（不进主对话上下文）。"""
+    require_auth(request)
+    import skill_selector
+    result = await skill_selector.select_skills(text.strip() or "(空)", provider_id, model)
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# 用户自定义 Prompt
+# --------------------------------------------------------------------------- #
+
+_CUSTOM_PROMPT_NAME_MAX = 80
+_CUSTOM_PROMPT_CONTENT_MAX = 20000
+_CUSTOM_PROMPT_COUNT_MAX = 50
+
+
+def _custom_prompt_values(payload: dict, current: dict | None = None) -> dict:
+    """校验并规范化新增/编辑字段；已有项目在局部更新时保留未提交字段。"""
+    if current is not None and not any(key in payload for key in ("name", "content", "enabled")):
+        raise HTTPException(status_code=400, detail="没有可更新的 Prompt 字段")
+
+    values = dict(current or {})
+    for key in ("name", "content"):
+        if key in payload:
+            if not isinstance(payload[key], str):
+                raise HTTPException(status_code=400, detail=f"{key} 必须是字符串")
+            values[key] = payload[key].strip()
+        elif current is None:
+            values[key] = ""
+
+    if "enabled" in payload:
+        if type(payload["enabled"]) is not bool:
+            raise HTTPException(status_code=400, detail="enabled 必须是布尔值")
+        values["enabled"] = payload["enabled"]
+    elif current is None or "enabled" not in values:
+        # 兼容早期/手工写入、但未包含 enabled 字段的条目。
+        values["enabled"] = True
+
+    name = values.get("name", "")
+    content = values.get("content", "")
+    if not isinstance(name, str) or not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="name 和 content 必须是字符串")
+    if not name:
+        raise HTTPException(status_code=400, detail="Prompt 名称不能为空")
+    if "\n" in name or "\r" in name:
+        raise HTTPException(status_code=400, detail="Prompt 名称不能包含换行符")
+    if len(name) > _CUSTOM_PROMPT_NAME_MAX:
+        raise HTTPException(status_code=400, detail=f"Prompt 名称不能超过 {_CUSTOM_PROMPT_NAME_MAX} 个字符")
+    if not content:
+        raise HTTPException(status_code=400, detail="Prompt 内容不能为空")
+    if len(content) > _CUSTOM_PROMPT_CONTENT_MAX:
+        raise HTTPException(status_code=400, detail=f"Prompt 内容不能超过 {_CUSTOM_PROMPT_CONTENT_MAX} 个字符")
+    return {"name": name, "content": content, "enabled": values["enabled"]}
+
+
+def _editable_prompt_list(cfg: dict) -> list:
+    items = cfg.get("custom_prompts")
+    if not isinstance(items, list):
+        items = []
+        cfg["custom_prompts"] = items
+    return items
+
+
+def _assert_prompt_name_available(items: list, name: str, exclude_id: str = "") -> None:
+    normalized = name.casefold()
+    if any(isinstance(item, dict) and item.get("id") != exclude_id
+           and str(item.get("name", "")).strip().casefold() == normalized for item in items):
+        raise HTTPException(status_code=409, detail="已存在同名 Prompt，请使用其它名称")
+
+
+@app.get("/api/prompts")
+async def api_list_custom_prompts(request: Request):
+    require_auth(request)
+    return {"prompts": config.public_config().get("custom_prompts", [])}
+
+
+@app.post("/api/prompts")
+async def api_add_custom_prompt(request: Request, payload: dict = Body(...)):
+    require_auth(request)
+    values = _custom_prompt_values(payload)
+    item = {"id": "prompt_" + secrets.token_hex(6), **values}
+
+    def _mutate(cfg):
+        items = _editable_prompt_list(cfg)
+        if len(items) >= _CUSTOM_PROMPT_COUNT_MAX:
+            raise HTTPException(status_code=400, detail=f"最多可保存 {_CUSTOM_PROMPT_COUNT_MAX} 个自定义 Prompt")
+        _assert_prompt_name_available(items, item["name"])
+        items.append(item)
+
+    config.update(_mutate)
+    return {"ok": True, "prompt": item}
+
+
+@app.put("/api/prompts/{prompt_id}")
+async def api_update_custom_prompt(prompt_id: str, request: Request, payload: dict = Body(...)):
+    require_auth(request)
+    current = next((item for item in config.get("custom_prompts", []) or []
+                    if isinstance(item, dict) and item.get("id") == prompt_id), None)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Prompt 不存在")
+    values = _custom_prompt_values(payload, current)
+    item = {"id": prompt_id, **values}
+
+    def _mutate(cfg):
+        items = _editable_prompt_list(cfg)
+        existing = next((entry for entry in items
+                         if isinstance(entry, dict) and entry.get("id") == prompt_id), None)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Prompt 不存在")
+        _assert_prompt_name_available(items, item["name"], exclude_id=prompt_id)
+        existing.clear()
+        existing.update(item)
+
+    config.update(_mutate)
+    return {"ok": True, "prompt": item}
+
+
+@app.delete("/api/prompts/{prompt_id}")
+async def api_delete_custom_prompt(prompt_id: str, request: Request):
+    require_auth(request)
+
+    def _mutate(cfg):
+        items = _editable_prompt_list(cfg)
+        index = next((idx for idx, item in enumerate(items)
+                      if isinstance(item, dict) and item.get("id") == prompt_id), None)
+        if index is None:
+            raise HTTPException(status_code=404, detail="Prompt 不存在")
+        items.pop(index)
+
+    config.update(_mutate)
+    return {"ok": True, "id": prompt_id}
 
 
 @app.get("/api/prompt")
@@ -462,6 +709,17 @@ async def api_chat(request: Request, payload: dict = Body(...)):
     provider_id = str(payload.get("provider_id", "") or "")
     model = str(payload.get("model", "") or "")
     workspace = str(payload.get("workspace", "") or "").strip()
+
+    # 技能：前端用 $ 指定时为字符串列表；未指定为 None（交给 skill_selector 自动选择）
+    raw_skills = payload.get("skills")
+    if raw_skills is None:
+        skills_param = None
+    elif isinstance(raw_skills, str):
+        skills_param = [raw_skills] if raw_skills.strip() else []
+    elif isinstance(raw_skills, list):
+        skills_param = [str(s).strip() for s in raw_skills if str(s).strip()]
+    else:
+        skills_param = None
     if workspace:
         ws_path = config.resolve_workspace(workspace)
         try:
@@ -474,7 +732,7 @@ async def api_chat(request: Request, payload: dict = Body(...)):
     async def event_stream():
         try:
             with config.use_workspace(workspace):
-                async for event in agent_runtime.run_chat(message, history, provider_id, model):
+                async for event in agent_runtime.run_chat(message, history, provider_id, model, skill_names=skills_param):
                     yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
         except Exception as exc:  # noqa: BLE001
             yield "data: " + json.dumps({"event": "error", "message": str(exc)}, ensure_ascii=False) + "\n\n"

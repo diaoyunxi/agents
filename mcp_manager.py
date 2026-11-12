@@ -154,6 +154,9 @@ async def refresh_prompt() -> str:
     import time
 
     tools = await list_all_tools()
+    # 过滤被 tool_toggles 停用的 MCP 工具
+    toggles = config.get("tool_toggles", {}) or {}
+    tools = [t for t in tools if toggles.get(t["name"], True) is not False]
     if not tools:
         _prompt_cache.update({"text": "", "stamp": time.time()})
         return ""

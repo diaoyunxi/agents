@@ -54,6 +54,11 @@ def _check_allowed(name: str, limits: dict) -> str:
     """返回空串表示允许，否则返回拒绝原因。`stop` 是控制信号，永远放行。"""
     if name == STOP_TOOL:
         return ""
+    # 检查 tool_toggles 开关
+    import config
+    toggles = config.get("tool_toggles", {}) or {}
+    if toggles.get(name) is False:
+        return "工具 `{0}` 已被停用（可在设置页重新启用）".format(name)
     if not limits.get("enabled", True):
         return ""
     allowed = limits.get("allowed_tools") or []
@@ -126,8 +131,15 @@ def _format_results(results: list) -> str:
     return "\n".join(lines)
 
 
-async def run_chat(user_input, history=None, provider_id="", model=""):
-    """执行一轮完整对话，产出事件字典流。"""
+async def run_chat(user_input, history=None, provider_id="", model="", skill_names=None):
+    """执行一轮完整对话，产出事件字典流。
+
+    `skill_names`:
+      - 列表 → 按指定技能加载
+      - None → 自动选择（调用 skill_selector）
+    """
+    import skill_selector
+
     history = history or []
     limits = _limits()
     enabled = limits.get("enabled", True)
@@ -137,7 +149,18 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
 
     provider, chosen_model = resolve_provider(provider_id, model)
     await mcp_manager.refresh_prompt()
-    system = prompt_builder.build_system_prompt() + "\n\n" + prompt_builder.build_user_context()
+    model_type = ai_client.model_type_of(provider, chosen_model)
+
+    # 技能路由：用户明确指定 → 直接用；未指定 → 独立模型请求选择
+    if skill_names is not None:
+        selected_skills = skill_names
+        skill_note = "用户指定技能: " + (", ".join(selected_skills) if selected_skills else "（无）")
+    else:
+        sel = await skill_selector.select_skills(user_input, provider_id, model)
+        selected_skills = sel["skills"]
+        skill_note = sel.get("note", "")
+
+    system = prompt_builder.build_system_prompt(skill_names=selected_skills) + "\n\n" + prompt_builder.build_user_context()
 
     messages = [{"role": "system", "content": system}]
     for item in history:
@@ -152,7 +175,10 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
         "session_id": uuid.uuid4().hex[:12],
         "provider": provider.get("name") or provider.get("id"),
         "model": chosen_model,
+        "model_type": model_type,
         "workspace": str(config.workspace_dir()),
+        "skills": selected_skills,
+        "skill_note": skill_note,
         "limits": {
             "max_rounds": max_rounds,
             "max_total_calls": max_total,
@@ -170,8 +196,10 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
         tools = []
         if config.get("ai.use_function_calling", True):
             try:
-                builtin = tool_loader.list_tools()
+                builtin = tool_loader.list_enabled_tools()
                 mcp_tools = await mcp_manager.list_all_tools()
+                toggles = config.get("tool_toggles", {}) or {}
+                mcp_tools = [t for t in mcp_tools if toggles.get(t.get("name", ""), True) is not False]
                 tools = function_tools.build_function_tools(builtin, mcp_tools, [function_tools.STOP_FUNCTION])
             except Exception as exc:  # noqa: BLE001
                 print("[runtime] 构建函数工具失败，降级为正文调用: " + str(exc))
