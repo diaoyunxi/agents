@@ -95,10 +95,23 @@
     <div class="card">
       <h3>已加载工具 <span class="badge" id="toolCount">0</span></h3>
       <div class="nav-row">
-        <span class="hint">工具来自 tools/ 目录，每个工具一个文件夹</span>
+        <span class="hint">停用后模型无法调用，提示词会自动重新生成</span>
+        <button class="ghost" id="toggleAllOff">全部停用</button>
+        <button class="ghost" id="toggleAllOn">全部启用</button>
         <button id="reloadTools">重新扫描</button>
       </div>
       <div id="toolList"></div>
+    </div>
+    <div class="card">
+      <h3>自定义配置 <span class="hint" style="font-weight:normal">（可被工具代码读取的任意键值）</span></h3>
+      <div class="hint">工具内通过 <code style="font-size:12px">from tools import loader; loader.get_custom_config()</code> 读取此段，常用于工具行为参数。</div>
+      <div id="customCfgList"></div>
+      <div class="row">
+        <label><span class="label">键</span><input id="ccKey" placeholder="e.g. max_file_size"></label>
+        <label><span class="label">值</span><input id="ccVal" placeholder="e.g. 1048576"></label>
+        <button class="ghost" id="ccAdd">添加</button>
+      </div>
+      <button class="primary" id="saveCustomCfg">保存自定义配置</button>
     </div>
   </div>
 
@@ -127,6 +140,31 @@
   </div>
 
   <div id="panel-prompt" style="display:none">
+    <div class="card">
+      <h3>我的 Prompt <span class="badge" id="customPromptCount">0</span></h3>
+      <div class="nav-row" style="margin-top:0;padding-top:0;border-top:0">
+        <span class="hint">已启用的 Prompt 会按列表顺序加入后续对话的 System Prompt</span>
+        <button class="primary" id="showCustomPromptEditor">添加 Prompt</button>
+      </div>
+      <div id="customPromptEditor" class="prompt-editor" style="display:none">
+        <h4 id="customPromptFormTitle">添加 Prompt</h4>
+        <input id="cpId" type="hidden">
+        <label><span class="label">名称</span><input id="cpName" maxlength="80" placeholder="例如：代码审查助手" autocomplete="off"></label>
+        <label><span class="label">内容</span><textarea id="cpContent" rows="8" maxlength="20000" placeholder="输入你希望智能体遵循的角色、规则或输出要求" style="font-family:var(--font-mono);font-size:13px"></textarea></label>
+        <div class="prompt-form-meta">
+          <label class="check-row"><input id="cpEnabled" type="checkbox" checked><span>保存后立即启用</span></label>
+          <span class="hint" id="cpContentCount">0 / 20000</span>
+        </div>
+        <div class="nav-row">
+          <span class="hint">自定义内容会追加在内置规则之后</span>
+          <div>
+            <button class="ghost" id="cancelCustomPrompt">取消</button>
+            <button class="primary" id="saveCustomPrompt">保存 Prompt</button>
+          </div>
+        </div>
+      </div>
+      <div id="customPromptList" class="prompt-list"></div>
+    </div>
     <div class="card">
       <h3>技能（skills/ 目录，一个技能一个 md 文件）</h3>
       <div id="skillList"></div>

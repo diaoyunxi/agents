@@ -18,6 +18,21 @@ function scrollDown() {
   threadEl.scrollTop = threadEl.scrollHeight;
 }
 
+/* 自动跟随滚动：只有当用户已停在底部附近时，流式内容才继续滚到底；
+   用户手动上滑查看历史时不打断（新轮次不再强制拉回底部）。 */
+let pinnedBottom = true;
+function isNearBottom(threshold) {
+  threshold = threshold == null ? 80 : threshold;
+  return threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight <= threshold;
+}
+function refreshPinnedBottom() {
+  pinnedBottom = isNearBottom();
+}
+threadEl.addEventListener('scroll', refreshPinnedBottom);
+function autoScroll() {
+  if (pinnedBottom) scrollDown();
+}
+
 /* ---------- 工作区（每轮对话开始时生效） ---------- */
 let defaultWorkspace = '';
 
@@ -76,10 +91,17 @@ async function fillModels(pid) {
   const mSel = document.getElementById('modelSel');
   mSel.innerHTML = '';
   const models = res.models && res.models.length ? res.models : [{ id: res.model }];
+  const LABELS = {
+    text_to_image: '文生图', image_to_text: '图生文', image_classification: '图像分类',
+    text_classification: '文本分类', translation: '翻译', text_generation: '文本生成',
+    text_to_speech: '语音合成', automatic_speech_recognition: '语音识别',
+    voice_activity_detection: '语音活动检测', text_embedding: '文本嵌入'
+  };
   models.forEach(function (m) {
     const opt = document.createElement('option');
     opt.value = m.id;
-    opt.textContent = m.name || m.id;
+    const t = m.type || 'text_generation';
+    opt.textContent = (m.name || m.id) + (t !== 'text_generation' ? ' · ' + (LABELS[t] || t) : '');
     if (m.id === res.model) opt.selected = true;
     mSel.appendChild(opt);
   });
@@ -175,7 +197,7 @@ function addToolBlock(call) {
   };
 
   (cur.roundBox || cur.content).appendChild(box);
-  scrollDown();
+  autoScroll();
   const rec = { box, state, out };
   cur.blocks.push(rec);
   return rec;
@@ -255,7 +277,7 @@ function addQuestionBlock(ev) {
 
   box.appendChild(body);
   (cur.roundBox || cur.content).appendChild(box);
-  scrollDown();
+  autoScroll();
 }
 
 function expireQuestions() {
@@ -505,6 +527,130 @@ document.getElementById('newChat').onclick = async function () {
   document.getElementById('input').focus();
 };
 
+/* ---------- 技能 $ 选择器 ---------- */
+let skillList = [];   // [{name, description, when_to_use}]
+let skillSet = {};     // name -> true
+
+async function loadSkillList() {
+  try {
+    const res = await api('/api/skills?slim=true');
+    skillList = res.skills || [];
+    skillSet = {};
+    skillList.forEach(function (s) { skillSet[s.name] = true; });
+  } catch (err) { skillList = []; }
+}
+
+function extractSkillNames(text) {
+  // 按空白切分 token，挑出「$ 后紧跟的已知技能名」。避免依赖变长 lookbehind。
+  const found = [];
+  String(text || '').split(/\s+/).forEach(function (tok) {
+    if (tok.charAt(0) !== '$') return;
+    const name = tok.slice(1).replace(/[.,;:!?、。；，！？()（）\[\]【】"']+/g, '').toLowerCase();
+    if (name && skillSet[name] && found.indexOf(name) < 0) found.push(name);
+  });
+  return found;
+}
+
+function positionPicker() {
+  // picker 位于 .composer-box（position:relative）内部，绝对定位贴在其底边下方
+  const picker = document.getElementById('skillPicker');
+  picker.style.left = '10px';
+  picker.style.top = '100%';
+}
+
+function renderPicker(filter) {
+  const picker = document.getElementById('skillPicker');
+  picker.innerHTML = '';
+  picker.dataset.active = '0';
+  const f = (filter || '').toLowerCase();
+  const matches = skillList.filter(function (s) {
+    if (!f) return true;
+    return s.name.indexOf(f) >= 0 || (s.description || '').toLowerCase().indexOf(f) >= 0;
+  }).slice(0, 20);
+  if (!matches.length) {
+    picker.appendChild(el('div', 'skill-picker-empty', skillList.length ? '无匹配技能' : '技能库为空'));
+    return;
+  }
+  matches.forEach(function (s) {
+    const item = el('div', 'skill-picker-item');
+    item.dataset.name = s.name;
+    item.appendChild(el('span', 'sk-name', '$' + s.name));
+    const desc = el('span', 'sk-desc', (s.description || s.when_to_use || '').slice(0, 60));
+    item.appendChild(desc);
+    item.onclick = function () { insertSkill(s.name); };
+    picker.appendChild(item);
+  });
+  picker.style.display = 'block';
+}
+
+function closePicker() {
+  document.getElementById('skillPicker').style.display = 'none';
+}
+
+function insertSkill(name) {
+  const input = document.getElementById('input');
+  const start = input.selectionStart;
+  // 替换从最近一个行首/空白后的 $ 到光标之间的片段
+  const before = input.value.slice(0, start);
+  const seg = before.match(/(?:^|(?<=\s))\$[a-z0-9-]*$/i);
+  let replaceFrom = start;
+  if (seg) replaceFrom = start - seg[0].length;
+  const tail = input.value.slice(start);
+  input.value = input.value.slice(0, replaceFrom) + '$' + name + ' ' + tail;
+  const pos = replaceFrom + name.length + 2;
+  input.focus();
+  input.setSelectionRange(pos, pos);
+  closePicker();
+}
+
+// 监听输入：检测 $ 触发浮层
+(function bindSkillPicker() {
+  const input = document.getElementById('input');
+  input.addEventListener('input', function () {
+    const caret = input.selectionStart;
+    const before = input.value.slice(0, caret);
+    const seg = before.match(/(?:^|(?<=\s))\$([a-z0-9-]*)$/i);
+    if (seg && skillList.length) {
+      positionPicker();
+      renderPicker(seg[1]);
+    } else {
+      closePicker();
+    }
+  });
+  input.addEventListener('keydown', function (e) {
+    const picker = document.getElementById('skillPicker');
+    if (picker.style.display === 'block') {
+      const items = Array.prototype.slice.call(picker.querySelectorAll('.skill-picker-item'));
+      const idx = parseInt(picker.dataset.active || '0', 10);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = Math.min(idx + 1, items.length - 1);
+        picker.dataset.active = next;
+        highlight(items, next);
+      }
+      else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = Math.max(idx - 1, 0);
+        picker.dataset.active = prev;
+        highlight(items, prev);
+      }
+      else if (e.key === 'Enter' && items.length && !e.shiftKey) {
+        e.preventDefault();
+        const active = items[Math.min(idx, items.length - 1)];
+        insertSkill(active.dataset.name);
+      }
+      else if (e.key === 'Escape') { closePicker(); }
+    }
+  });
+  document.addEventListener('click', function (e) {
+    if (!document.getElementById('skillPicker').contains(e.target) && e.target.id !== 'input') closePicker();
+  });
+
+  function highlight(items, active) {
+    items.forEach(function (it, i) { it.classList.toggle('active', i === active); });
+  }
+})();
+
 /* ---------- SSE 会话 ---------- */
 function handle(ev) {
   switch (ev.event) {
@@ -512,6 +658,13 @@ function handle(ev) {
       cur.modelBadge.textContent = ev.model;
       document.getElementById('status').textContent = ev.provider + ' · ' + ev.model;
       if (ev.workspace) setWorkspaceReal(ev.workspace);
+      if (ev.skill_note) {
+        const sk = el('div', 'skill-note');
+        sk.title = ev.skill_note;
+        const loaded = (ev.skills && ev.skills.length) ? ev.skills.join('、') : '（未加载技能）';
+        sk.innerHTML = '技能：' + escapeHtml(loaded);
+        cur.head.appendChild(sk);
+      }
       break;
     case 'round': {
       cur.round = ev.index;
@@ -533,7 +686,7 @@ function handle(ev) {
       cur.live += ev.content;
       if (cur.answerCur) {
         cur.answerCur.innerHTML = '<span class="badge grey">输出中</span> ' + escapeHtml(cur.live.slice(-1500));
-        scrollDown();
+        autoScroll();
       }
       break;
     case 'message': {
@@ -549,7 +702,7 @@ function handle(ev) {
       cur.raw += (ev.raw || '');
       // 开始新轮次时标记一轮结束，保存当前 assistant 消息
       if (cur.round > 1) saveAssistantMessage();
-      scrollDown();
+      autoScroll();
       break;
     }
     case 'tool_start':
@@ -627,11 +780,16 @@ async function send() {
   turn.appendChild(head);
   turn.appendChild(el('div', 'user-text', text));
   threadInner.appendChild(turn);
+  pinnedBottom = true; // 新一轮提问：重新自动跟随
   scrollDown();
   history.push({ role: 'user', content: text });
 
+  // 从消息中提取 $skillname 提及；无提及则传 null 让后端自动选择技能
+  const mentionedSkills = extractSkillNames(text);
+
   cur = newAssistant();
   controller = new AbortController();
+  closePicker();
   document.getElementById('send').style.display = 'none';
   document.getElementById('stop').style.display = 'inline-block';
   document.getElementById('status').innerHTML = '<span class="spinner"></span> 生成中';
@@ -645,7 +803,8 @@ async function send() {
         history: history.slice(0, -1),
         provider_id: document.getElementById('providerSel').value,
         model: document.getElementById('modelSel').value,
-        workspace: wsValue()
+        workspace: wsValue(),
+        skills: mentionedSkills.length ? mentionedSkills : null
       }),
       signal: controller.signal
     });
@@ -690,4 +849,5 @@ document.getElementById('send').onclick = async function () {
 loadModels().catch(err => toast(err.message, 'err'));
 refreshConversationList().catch(err => toast(err.message, 'err'));
 loadDefaultWorkspace().catch(err => toast(err.message, 'err'));
+loadSkillList().catch(function () { /* 技能列表加载失败时 $ 选择器不可用，主任务不受影响 */ });
 

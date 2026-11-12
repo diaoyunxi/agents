@@ -58,8 +58,9 @@
           <button class="ghost" id="wsDefault" title="恢复默认工作区">默认</button>
           <span class="hint grow" id="wsReal"></span>
         </div>
-        <div class="composer-box">
-          <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        <div class="composer-box" style="position:relative">
+          <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行，输入 $ 选择技能"></textarea>
+          <div id="skillPicker" class="skill-picker" style="display:none"></div>
         </div>
         <div class="composer-actions">
           <button class="primary" id="send">发送</button>
