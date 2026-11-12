@@ -206,7 +206,7 @@ class Anchor:
 def _read(el, UIA) -> Node:
     role_id = _safe(lambda: int(el.CurrentControlType), -1)
     role = _CONTROL_TYPES.get(role_id, "custom")
-    name = (_safe(lambda: el.CurrentName, "") or "").strip()
+    name = (_safe(lambda el=el: el.CurrentName, "") or "").strip()
     secure = bool(_safe(lambda: el.CurrentIsPassword, False)) and role in ("edit", "document")
 
     bounds = None
@@ -343,11 +343,11 @@ def list_windows() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     el = _first_child(walker, root)
     while el is not None:
-        name = (_safe(lambda: el.CurrentName, "") or "").strip()
-        pid = int(_safe(lambda: el.CurrentProcessId, 0) or 0)
+        name = (_safe(lambda el=el: el.CurrentName, "") or "").strip()
+        pid = int(_safe(lambda el=el: el.CurrentProcessId, 0) or 0)
         out.append({
             "title": name,
-            "class": (_safe(lambda: el.CurrentClassName, "") or "").strip(),
+            "class": (_safe(lambda el=el: el.CurrentClassName, "") or "").strip(),
             "pid": pid,
             "exe": _exe_for_pid(pid) or "",
         })
@@ -372,9 +372,9 @@ def find_window(app: str):
     best_el, best_score = None, 0
     el = _first_child(walker, root)
     while el is not None:
-        name = (_safe(lambda: el.CurrentName, "") or "").lower()
-        cls = (_safe(lambda: el.CurrentClassName, "") or "").lower()
-        pid = int(_safe(lambda: el.CurrentProcessId, 0) or 0)
+        name = (_safe(lambda el=el: el.CurrentName, "") or "").lower()
+        cls = (_safe(lambda el=el: el.CurrentClassName, "") or "").lower()
+        pid = int(_safe(lambda el=el: el.CurrentProcessId, 0) or 0)
         exe = (_exe_for_pid(pid) or "").lower()
         stem = exe[:-4] if exe.endswith(".exe") else exe
         score = 0
