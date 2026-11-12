@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """MCP 接入层：连接 config.json 中配置的 MCP Server，并把它们的工具纳入工具清单。"""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """FastAPI 后端：认证、配置、模型、工具、技能、MCP、SSE 对话。Web 端仅做展示，所有逻辑在此实现。"""
 
 from __future__ import annotations

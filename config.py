@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """全局配置中心：负责 config.json 的加载、保存、内存缓存与变更监听。
 
 所有 AI 提供商、工具调用限制、MCP 服务器等配置都保存在 config.json，
