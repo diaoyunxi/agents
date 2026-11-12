@@ -337,7 +337,7 @@ def _exe_for_pid(pid: int) -> str | None:
 def list_windows() -> list[dict[str, Any]]:
     """枚举顶层窗口：标题、类名、进程、可执行名。"""
 
-    UIA, uia = _uia()
+    _, uia = _uia()
     walker = uia.RawViewWalker
     root = uia.GetRootElement()
     out: list[dict[str, Any]] = []
@@ -366,7 +366,7 @@ def find_window(app: str):
     if not needle:
         return None
     needle_stem = needle[:-4] if needle.endswith(".exe") else needle
-    UIA, uia = _uia()
+    _, uia = _uia()
     walker = uia.RawViewWalker
     root = uia.GetRootElement()
     best_el, best_score = None, 0
