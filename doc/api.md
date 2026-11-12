@@ -20,8 +20,10 @@ FastAPI 后端路由。除页面路由外，`/api/*` 需先通过 `/api/auth/log
 | GET / POST | `/api/providers` |
 | DELETE | `/api/providers/{pid}` |
 | POST | `/api/providers/{pid}/models` |
-| POST | `/api/providers/{pid}/test` |
+| POST | `/api/providers/{pid}/models/type`（手动覆盖模型类型，type 为空=恢复自动识别） |
+| POST | `/api/providers/{pid}/test`（可选带 `{model, model_type}` 做按类型的连通性探测） |
 | POST | `/api/providers/{pid}/select` |
+| POST | `/api/providers/{pid}/invoke`（按模型类型分发一次非流式推理） |
 | GET | `/api/models` |
 
 ## 工具 / 技能 / MCP
@@ -31,6 +33,8 @@ FastAPI 后端路由。除页面路由外，`/api/*` 需先通过 `/api/auth/log
 | POST | `/api/tools/refresh` |
 | GET | `/api/tools/{name}/doc` |
 | GET | `/api/skills` |
+| GET / POST | `/api/prompts` |
+| PUT / DELETE | `/api/prompts/{prompt_id}` |
 | GET | `/api/prompt` |
 | GET | `/api/mcp` |
 | POST | `/api/mcp/refresh` |
