@@ -1,0 +1,35 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 6573,
+    "workspace": "."
+  },
+  "auth": {
+    "enabled": true,
+    "username": "root",
+    "password": "<首次启动后请在设置页修改>",
+    "setup_done": false
+  },
+  "ai": {
+    "active_provider_id": "",
+    "active_model": "",
+    "max_tokens": 8192,
+    "temperature": 0.7,
+    "timeout": 180,
+    "use_function_calling": true
+  },
+  "providers": [],
+  "tool_limits": {
+    "enabled": true,
+    "max_calls_per_round": 10,
+    "max_total_calls": 60,
+    "max_rounds": 25,
+    "denied_tools": [],
+    "allowed_tools": [],
+    "require_confirmation": []
+  },
+  "mcp_servers": [],
+  "ui": {
+    "theme": "dark"
+  }
+}
