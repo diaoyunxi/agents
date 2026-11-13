@@ -847,6 +847,9 @@ async def api_update_conversation(cid: str, request: Request, payload: dict = Bo
             # 保留原生 function calling 的工具调用信息
             if "tool_calls" in m and m["tool_calls"]:
                 entry["tool_calls"] = m["tool_calls"]
+            # 保留工具结果，供刷新后继续对话时重建 OpenAI tool 消息
+            if "tool_results" in m and m["tool_results"]:
+                entry["tool_results"] = m["tool_results"]
             new_msgs.append(entry)
         data["messages"] = new_msgs
     data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")

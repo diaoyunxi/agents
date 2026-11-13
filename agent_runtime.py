@@ -165,8 +165,38 @@ async def run_chat(user_input, history=None, provider_id="", model="", skill_nam
     messages = [{"role": "system", "content": system}]
     for item in history:
         role = item.get("role")
-        if role in ("user", "assistant") and item.get("content"):
-            messages.append({"role": role, "content": item["content"]})
+        content = item.get("content")
+        if role in ("user", "assistant") and (content or item.get("tool_calls") or item.get("tool_results")):
+            if role == "assistant" and item.get("tool_calls"):
+                tool_results = item.get("tool_results") or []
+                result_by_id = {
+                    str(r.get("tool_call_id") or ""): str(r.get("output") or "")
+                    for r in tool_results if isinstance(r, dict)
+                }
+                messages.append({
+                    "role": role,
+                    "content": content if isinstance(content, str) and content else None,
+                    "tool_calls": [
+                        {
+                            "id": str(tc.get("id") or "call_{0}".format(uuid.uuid4().hex[:12])),
+                            "type": "function",
+                            "function": {
+                                "name": str(tc.get("name") or ""),
+                                "arguments": json.dumps(tc.get("arguments") or {}, ensure_ascii=False),
+                            },
+                        }
+                        for tc in item["tool_calls"]
+                        if isinstance(tc, dict)
+                    ],
+                })
+                for tc in item["tool_calls"]:
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = str(tc.get("id") or "")
+                    if tc_id in result_by_id:
+                        messages.append(_tool_message(tc_id, result_by_id[tc_id], []))
+            else:
+                messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": user_input})
 
     started = time.time()

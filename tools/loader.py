@@ -238,30 +238,79 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
             return {"ok": False, "output": "\n".join(hint)}
 
     run: Callable[..., Any] = item["run"]
-    kwargs = arguments or {}
+    kwargs, missing, ignored = _prepare_kwargs(name, run, item.get("parameters") or {}, arguments or {})
+
+    # 缺必填参数：不执行，返回对模型友好的结构化提示（列出工具、缺哪个、该传什么类型），
+    # 让模型可据此自纠，而不是拿到裸 Python TypeError 后无从下手。
+    if missing:
+        schema_props = (item.get("parameters") or {}).get("properties", {}) or {}
+        detail = "；".join(
+            "{0}（{1}）".format(m, (schema_props.get(m, {}) or {}).get("type", "必填"))
+            for m in missing
+        )
+        note = (
+            f"工具 `{name}` 缺少必填参数: {detail}。请补齐这些参数后重新调用，"
+            f"不要省略必填项。"
+        )
+        if ignored:
+            note += f" 另外，你传了未知参数 {ignored}，已忽略（正确参数见该工具说明）。"
+        return {"ok": False, "output": note}
+
     try:
-        signature = inspect.signature(run)
-        if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
-            allowed = set(signature.parameters)
-            kwargs = {k: v for k, v in kwargs.items() if k in allowed}
         result = run(**kwargs)
         if inspect.isawaitable(result):
             result = await result
     except ToolError as exc:
         return {"ok": False, "output": f"工具 `{name}` 执行失败: {exc}"}
     except TypeError as exc:
-        return {"ok": False, "output": f"工具 `{name}` 参数错误: {exc}"}
+        return {"ok": False, "output": f"工具 `{name}` 参数错误: {exc}（请核对参数名与取值是否匹配 schema）"}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "output": f"工具 `{name}` 抛出异常: {exc}\n{traceback.format_exc(limit=3)}"}
 
-    if isinstance(result, str):
-        return {"ok": True, "output": result}
+    # 有参数被忽略时附一条提醒，避免模型误以为「多传的参数生效了」
+    result_str = result if isinstance(result, str) else json_dumps(result)
+    if ignored:
+        note = f"注意: 已忽略未知参数 {ignored}（正确参数名见该工具说明）。"
+        result_str = f"{result_str}\n{note}".strip()
     if isinstance(result, dict):
         out = dict(result)
         out.setdefault("ok", True)
-        out.setdefault("output", "")
+        out["output"] = result_str
         return out
-    return {"ok": True, "output": json_dumps(result)}
+    return {"ok": True, "output": result_str}
+
+
+def _prepare_kwargs(name: str, run: Callable[..., Any], schema: dict, arguments: dict) -> tuple:
+    """净化参数并校验必填项。
+
+    返回 (kwargs, missing, ignored)：
+      - kwargs   可直接 run(**kwargs) 的参数字典；
+      - missing  schema 标记 required 但本次未传的参数名列表；
+      - ignored  传了但 run() 签名不认识、被丢弃的参数名列表。
+
+    处理两类调用期隐患：
+      1. 正文 JSON 解析失败时上游塞入的 ``{"__raw__": "..."}`` 标记——它不是真实参数，
+         直接取出并丢弃，避免把整串原始 JSON 当成参数；
+      2. 所有内置工具都是固定命名参数（无 **kwargs），LLM 多传/漏传都会在这里被拦截，
+         而非落到裸 Python TypeError。
+    """
+    has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in inspect.signature(run).parameters.values())
+    sig_params = set(inspect.signature(run).parameters)
+
+    kwargs = dict(arguments or {})
+    kwargs.pop("__raw__", None)          # 正文 JSON 解析失败的兜底标记，不是真实参数
+
+    if not has_varkw:
+        ignored = sorted(k for k in kwargs if k not in sig_params)
+        kwargs = {k: v for k, v in kwargs.items() if k in sig_params}
+    else:
+        ignored = []
+
+    # required 里只要本次没给有效值（缺键 / None / 空串 / 空列表）就视为缺失，便于自纠
+    required = sorted({r for r in (schema.get("required") or [])
+                       if kwargs.get(r) in (None, "", [])})
+    return kwargs, required, ignored
 
 
 def json_dumps(value: Any) -> str:

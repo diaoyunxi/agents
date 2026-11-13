@@ -157,6 +157,112 @@ def _timeout():
         return DEFAULT_TIMEOUT
 
 
+# --------------------------------------------------------------------------- #
+# HTTP 429（限流）指数退避重试
+#
+# 部分 LLM/提供商在并发或配额紧张时返回 429 Too Many Requests。为避免单次
+# 限流就中断任务，对所有出站 LLM 请求统一做「指数退避 + 最多 7 次尝试」的
+# 重试：命中 429 时按 base*2**n 递增休眠后再试，同时尊重服务端 Retry-After。
+# 其它 4xx/5xx 不做重试，直接抛出（保持原有报错行为）。
+# --------------------------------------------------------------------------- #
+
+MAX_RETRIES = 7            # 总尝试次数上限（含首次）
+RETRY_BASE = 1.0           # 指数退避基础秒数
+RETRY_FACTOR = 2.0         # 每次翻倍
+RETRY_CAP = 60.0           # 单次休眠上限（秒）
+
+
+def _retry_delay(attempt: int, resp=None) -> float:
+    """计算第 attempt 次（1 起）失败后的休眠秒数：指数退避，并尽量尊重 Retry-After。"""
+    delay = RETRY_BASE * (RETRY_FACTOR ** (attempt - 1))
+    delay = min(delay, RETRY_CAP)
+    if resp is not None:
+        retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+        if retry_after:
+            try:
+                ra = float(retry_after)
+                # 仅当 Retry-After 比退避值更短时才采用，避免无限等待
+                delay = min(max(ra, delay), RETRY_CAP)
+            except (TypeError, ValueError):
+                pass
+    return delay
+
+
+async def _post_with_retry(client, method, url, *, label, **request_kwargs):
+    """对出站 LLM 请求做 429 指数退避重试。
+
+    透传 httpx 的请求参数（headers/json/data/files/timeout 等，见 request_kwargs）。
+    命中 429 时按指数退避（1/2/4/8/16/32/60s，尊重 Retry-After）重试，最多 MAX_RETRIES
+    次；其它 4xx/5xx 立即返回（调用方按原逻辑抛错）；重试耗尽仍 429 则抛带明确信息的
+    ValueError。返回 httpx.Response（非流式，已可读 body/content）。
+    """
+    if request_kwargs.get("stream"):
+        # 流式请求需 `async with client.stream(...)`，由 _stream_with_retry 处理
+        raise ValueError("_post_with_retry 不支持 stream=True，请使用 _stream_with_retry")
+    last_resp = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        if method.upper() == "GET":
+            last_resp = await client.get(url, **request_kwargs)
+        else:
+            last_resp = await client.post(url, **request_kwargs)
+        if last_resp.status_code != 429:
+            return last_resp
+        # 命中 429：若非最后一次则退避后重试
+        if attempt < MAX_RETRIES:
+            await asyncio.sleep(_retry_delay(attempt, last_resp))
+    body = ""
+    try:
+        body = (last_resp.text or "")[:500] if last_resp is not None else ""
+    except Exception:  # noqa: BLE001
+        body = ""
+    raise ValueError(
+        "{0} 请求失败：触发限流 HTTP 429，重试 {1} 次后仍被限流 {2}".format(
+            label, MAX_RETRIES, body))
+
+
+async def _get_with_retry(client, url, *, label, **request_kwargs):
+    """GET 版本的 429 指数退避重试（用于 fetch_models）。"""
+    return await _post_with_retry(client, "GET", url, label=label, **request_kwargs)
+
+
+def _stream_with_retry(client, url, *, label, headers=None, json=None,
+                       connect_timeout=30, **kwargs):
+    """流式 POST 的 429 指数退避重试。
+
+    命中 429 时退避重试（最多 MAX_RETRIES 次）；其它 >=400 立即抛错。
+    成功时返回一个 async context manager，用法：
+        async with _stream_with_retry(client, url, label=..., headers=..., json=...) as resp:
+            async for line in resp.aiter_lines(): ...
+    """
+    import contextlib
+    import contextvars
+
+    @contextlib.asynccontextmanager
+    async def _inner():
+        last_body = ""
+        for attempt in range(1, MAX_RETRIES + 1):
+            # 用独立 stream 上下文打开，先探测状态码
+            async with client.stream("POST", url, headers=headers, json=json, **kwargs) as resp:
+                if resp.status_code != 429:
+                    if resp.status_code >= 400:
+                        body = (await resp.aread()).decode("utf-8", errors="replace")
+                        raise ValueError("模型请求失败 HTTP {0}: {1}".format(
+                            resp.status_code, body[:500]))
+                    # 成功：把已打开的流交回调用方。
+                    # 注意：httpx 的 stream 上下文在此 async with 块内保持活跃，
+                    # 需在此块内 yield，退出时自动关闭。
+                    yield resp
+                    return
+                last_body = (await resp.aread()).decode("utf-8", errors="replace")[:500]
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(_retry_delay(attempt, None))
+        raise ValueError(
+            "{0} 流式请求失败：触发限流 HTTP 429，重试 {1} 次后仍被限流 {2}".format(
+                label, MAX_RETRIES, last_body))
+
+    return _inner()
+
+
 def build_payload(provider, model, messages, stream=True, tools=None):
     import config
     payload = {
@@ -185,7 +291,7 @@ async def fetch_models(provider):
         raise ValueError("请先填写 API Key")
     url = base + "/models"
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, headers=_headers(provider))
+        resp = await _get_with_retry(client, url, label="获取模型", headers=_headers(provider))
         if resp.status_code >= 400:
             raise ValueError("获取模型失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:300]))
         data = resp.json()
@@ -331,7 +437,8 @@ async def stream_chat(provider, model, messages, tools=None):
     tool_calls = []
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(_timeout(), connect=30)) as client:
-        async with client.stream("POST", url, headers=_headers(provider), json=payload) as resp:
+        async with _stream_with_retry(client, url, label="模型流式请求",
+                                       headers=_headers(provider), json=payload) as resp:
             if resp.status_code >= 400:
                 body = (await resp.aread()).decode("utf-8", errors="replace")
                 raise ValueError("模型请求失败 HTTP {0}: {1}".format(resp.status_code, body[:500]))
@@ -370,7 +477,8 @@ async def chat(provider, model, messages, tools=None):
     url = base + "/chat/completions"
     payload = build_payload(provider, model, messages, stream=False, tools=tools)
     async with httpx.AsyncClient(timeout=_timeout()) as client:
-        resp = await client.post(url, headers=_headers(provider), json=payload)
+        resp = await _post_with_retry(client, "POST", url, label="模型请求",
+                                       headers=_headers(provider), json=payload)
         if resp.status_code >= 400:
             raise ValueError("模型请求失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:500]))
         data = resp.json()
@@ -416,7 +524,8 @@ async def embed(provider: dict, model: str, input_text, extra: dict | None = Non
     payload.update(extra or {})
     url = base + "/embeddings"
     async with httpx.AsyncClient(timeout=_timeout()) as client:
-        resp = await client.post(url, headers=_headers(provider), json=payload)
+        resp = await _post_with_retry(client, "POST", url, label="嵌入请求",
+                                       headers=_headers(provider), json=payload)
         if resp.status_code >= 400:
             raise ValueError("嵌入请求失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:500]))
         data = resp.json()
@@ -439,7 +548,8 @@ async def image_generation(provider: dict, model: str, prompt: str, size: str = 
     payload.update(extra or {})
     url = base + "/images/generations"
     async with httpx.AsyncClient(timeout=_timeout()) as client:
-        resp = await client.post(url, headers=_headers(provider), json=payload)
+        resp = await _post_with_retry(client, "POST", url, label="生图请求",
+                                       headers=_headers(provider), json=payload)
         if resp.status_code >= 400:
             raise ValueError("生图请求失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:500]))
         data = resp.json()
@@ -467,7 +577,8 @@ async def audio_transcribe(provider: dict, model: str, audio_bytes: bytes,
     files = {"file": (filename, audio_bytes, "application/octet-stream")}
     url = base + "/audio/transcriptions"
     async with httpx.AsyncClient(timeout=_timeout()) as client:
-        resp = await client.post(url, headers=headers, data=data, files=files)
+        resp = await _post_with_retry(client, "POST", url, label="语音识别请求",
+                                       headers=headers, data=data, files=files)
         if resp.status_code >= 400:
             raise ValueError("语音识别请求失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:500]))
         if response_format == "json":
@@ -488,7 +599,8 @@ async def audio_speech(provider: dict, model: str, text: str, voice: str = "allo
     url = base + "/audio/speech"
     mime = "audio/" + (response_format if response_format in ("mp3", "wav", "opus", "flac", "pcm", "ogg") else "mp3")
     async with httpx.AsyncClient(timeout=_timeout()) as client:
-        resp = await client.post(url, headers=_headers(provider), json=payload)
+        resp = await _post_with_retry(client, "POST", url, label="语音合成请求",
+                                       headers=_headers(provider), json=payload)
         if resp.status_code >= 400:
             raise ValueError("语音合成请求失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:500]))
         return {"model": model, "audio_bytes": resp.content, "mime": mime, "text_chars": len(text)}
@@ -608,7 +720,8 @@ async def model_inference(provider: dict, model: str, model_type: str, payload: 
         req = {k: v for k, v in payload.items() if k in ("audio_b64", "audio", "extra", "endpoint", "sample_rate")}
         req.update(extra or {})
         async with httpx.AsyncClient(timeout=_timeout()) as client:
-            resp = await client.post(target, headers=_headers(provider), json=req)
+            resp = await _post_with_retry(client, "POST", target, label="模型推理(VAD)",
+                                           headers=_headers(provider), json=req)
             if resp.status_code >= 400:
                 raise ValueError("VAD 请求失败 HTTP {0}: {1}".format(resp.status_code, resp.text[:500]))
             try:

@@ -226,7 +226,7 @@ function addQuestionBlock(ev) {
     box.dataset.done = '1';
     state.textContent = '提交中';
     state.className = 'badge grey';
-    api('/api/question/' + encodeURIComponent(q.id || ''),
+    api('/api/question/' + encodeURIComponent(q.id || '') + '/answer',
       { body: { answer: labels.length === 1 ? labels[0] : labels } })
       .then(function () {
         state.textContent = '已回答';
@@ -358,7 +358,8 @@ function addUserTurn(text) {
   scrollDown();
 }
 
-function addAssistantTurn(content) {
+function addAssistantTurn(message) {
+  const content = message && message.content;
   const turn = el('div', 'turn agent');
   const head = el('div', 'turn-head');
   head.appendChild(el('span', 'role', 'Agent'));
@@ -368,6 +369,28 @@ function addAssistantTurn(content) {
   const body = el('div', 'md answer');
   body.innerHTML = content ? renderMarkdown(content) : '<p class="hint">（无正文输出）</p>';
   turn.appendChild(body);
+  if (message && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+    message.tool_calls.forEach(function (call) {
+      const box = el('div', 'call');
+      const callHead = el('div', 'call-head');
+      callHead.appendChild(el('span', 'tag', '工具'));
+      callHead.appendChild(el('span', 'nm', call.name || '未知工具'));
+      callHead.appendChild(el('span', 'grow'));
+      callHead.appendChild(el('span', 'badge grey', '历史调用'));
+      const args = el('pre', 'call-body args', JSON.stringify(call.arguments || {}, null, 2));
+      const out = el('pre', 'call-body');
+      out.style.display = 'none';
+      box.appendChild(callHead);
+      box.appendChild(args);
+      box.appendChild(out);
+      callHead.onclick = function () {
+        const open = out.style.display === 'none';
+        out.style.display = open ? 'block' : 'none';
+        args.style.display = open ? 'none' : 'block';
+      };
+      turn.appendChild(box);
+    });
+  }
   threadInner.appendChild(turn);
   scrollDown();
 }
@@ -415,14 +438,26 @@ async function loadConversationById(id) {
     paintWorkspaceHint();
     history.length = 0;
     (res.conversation.messages || []).forEach(function (m) {
-      history.push({ role: m.role, content: m.content });
+      const item = { role: m.role, content: m.content };
+      if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
+        item.tool_calls = m.tool_calls.map(function (c) {
+          const call = { id: c.id, name: c.name, arguments: c.arguments };
+          return call;
+        });
+      }
+      if (Array.isArray(m.tool_results) && m.tool_results.length) {
+        item.tool_results = m.tool_results.map(function (r) {
+          return { tool_call_id: r.tool_call_id, tool: r.tool, output: r.output, ok: r.ok };
+        });
+      }
+      history.push(item);
     });
     clearThread();
     if (!history.length) { showIntroPlaceholder(); }
     else {
       history.forEach(function (m) {
         if (m.role === 'user') addUserTurn(m.content);
-        else addAssistantTurn(m.content);
+        else addAssistantTurn(m);
       });
     }
     await refreshConversationList();
@@ -458,7 +493,7 @@ async function saveConversation() {
 
 // 收集当前 assistant 消息的完整结构（含 tool_calls 和 tool_results）
 function saveAssistantMessage() {
-  if (!cur || !cur.raw) return;
+  if (!cur || (!cur.raw && !(cur._toolCalls && cur._toolCalls.length))) return;
   // 找到 history 中最后一条 assistant 消息并更新它
   let lastAssistantIdx = -1;
   for (let i = history.length - 1; i >= 0; i--) {
@@ -467,7 +502,7 @@ function saveAssistantMessage() {
       break;
     }
   }
-  const msg = { role: 'assistant', content: cur.raw };
+  const msg = { role: 'assistant', content: cur.raw || '' };
   // 如果有工具调用记录，追加到消息中
   if (cur._toolCalls && cur._toolCalls.length > 0) {
     msg.tool_calls = cur._toolCalls;
@@ -481,8 +516,15 @@ function saveAssistantMessage() {
       ok: r.ok
     }));
   }
-  if (lastAssistantIdx >= 0) {
-    history[lastAssistantIdx] = msg;
+  if (lastAssistantIdx >= 0 && history[lastAssistantIdx]) {
+    const existing = history[lastAssistantIdx];
+    if (msg.tool_calls && msg.tool_calls.length) {
+      existing.tool_calls = (existing.tool_calls || []).concat(msg.tool_calls);
+    }
+    if (msg.tool_results && msg.tool_results.length) {
+      existing.tool_results = (existing.tool_results || []).concat(msg.tool_results);
+    }
+    if (!existing.content) existing.content = msg.content || '';
   } else {
     history.push(msg);
   }
