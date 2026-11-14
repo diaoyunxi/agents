@@ -101,6 +101,63 @@ def _tool_message(tool_call_id: str, output: str, images: list) -> dict:
     return {"role": "tool", "tool_call_id": tool_call_id, "content": text}
 
 
+def build_messages_from_history(history, user_input: str, enabled_tool_names=None) -> list:
+    """把前端保存的历史消息转换为可传给模型的 OpenAI 消息列表。
+
+    只有「tool_call_id 能配对的 assistant.tool_calls + tool_results」且工具名仍可用时
+    才会重放；未配对或工具已被禁用的历史工具调用会降级为普通 assistant 文本，避免刷新后
+    把残缺/不可执行的 tool 消息发给模型。
+    """
+
+    allowed_names = set(enabled_tool_names or [])
+    messages: list = []
+    for item in history:
+        role = item.get("role")
+        content = item.get("content")
+        if role in ("user", "assistant") and (content or item.get("tool_calls") or item.get("tool_results")):
+            if role == "assistant" and item.get("tool_calls"):
+                tool_results = item.get("tool_results") or []
+                result_by_id = {
+                    str(r.get("tool_call_id") or ""): str(r.get("output") or "")
+                    for r in tool_results if isinstance(r, dict)
+                }
+                paired_calls = []
+                for tc in item["tool_calls"]:
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = str(tc.get("id") or "")
+                    tc_name = str(tc.get("name") or "")
+                    if not tc_id or tc_id not in result_by_id:
+                        continue
+                    if allowed_names and tc_name not in allowed_names:
+                        continue
+                    paired_calls.append((tc_id, tc))
+                if not paired_calls:
+                    messages.append({"role": role, "content": content})
+                    continue
+                messages.append({
+                    "role": role,
+                    "content": content if isinstance(content, str) and content else None,
+                    "tool_calls": [
+                        {
+                            "id": tc_id,
+                            "type": "function",
+                            "function": {
+                                "name": str(tc.get("name") or ""),
+                                "arguments": json.dumps(tc.get("arguments") or {}, ensure_ascii=False),
+                            },
+                        }
+                        for tc_id, tc in paired_calls
+                    ],
+                })
+                for tc_id, _tc in paired_calls:
+                    messages.append(_tool_message(tc_id, result_by_id[tc_id], []))
+            else:
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_input})
+    return messages
+
+
 async def _ask_and_wait(outcome: dict) -> str:
     """ask_followup_question：挂起等待用户回答，返回回答文本。"""
 
@@ -161,44 +218,6 @@ async def run_chat(user_input, history=None, provider_id="", model="", skill_nam
         skill_note = sel.get("note", "")
 
     system = prompt_builder.build_system_prompt(skill_names=selected_skills) + "\n\n" + prompt_builder.build_user_context()
-
-    messages = [{"role": "system", "content": system}]
-    for item in history:
-        role = item.get("role")
-        content = item.get("content")
-        if role in ("user", "assistant") and (content or item.get("tool_calls") or item.get("tool_results")):
-            if role == "assistant" and item.get("tool_calls"):
-                tool_results = item.get("tool_results") or []
-                result_by_id = {
-                    str(r.get("tool_call_id") or ""): str(r.get("output") or "")
-                    for r in tool_results if isinstance(r, dict)
-                }
-                messages.append({
-                    "role": role,
-                    "content": content if isinstance(content, str) and content else None,
-                    "tool_calls": [
-                        {
-                            "id": str(tc.get("id") or "call_{0}".format(uuid.uuid4().hex[:12])),
-                            "type": "function",
-                            "function": {
-                                "name": str(tc.get("name") or ""),
-                                "arguments": json.dumps(tc.get("arguments") or {}, ensure_ascii=False),
-                            },
-                        }
-                        for tc in item["tool_calls"]
-                        if isinstance(tc, dict)
-                    ],
-                })
-                for tc in item["tool_calls"]:
-                    if not isinstance(tc, dict):
-                        continue
-                    tc_id = str(tc.get("id") or "")
-                    if tc_id in result_by_id:
-                        messages.append(_tool_message(tc_id, result_by_id[tc_id], []))
-            else:
-                messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": user_input})
-
     started = time.time()
     yield {
         "event": "start",
@@ -224,6 +243,7 @@ async def run_chat(user_input, history=None, provider_id="", model="", skill_nam
         stop_detail = ""
         # 构建 OpenAI function calling 所需的 tools schema（失败则降级为正文调用）
         tools = []
+        enabled_tool_names = set()
         if config.get("ai.use_function_calling", True):
             try:
                 builtin = tool_loader.list_enabled_tools()
@@ -231,10 +251,15 @@ async def run_chat(user_input, history=None, provider_id="", model="", skill_nam
                 toggles = config.get("tool_toggles", {}) or {}
                 mcp_tools = [t for t in mcp_tools if toggles.get(t.get("name", ""), True) is not False]
                 tools = function_tools.build_function_tools(builtin, mcp_tools, [function_tools.STOP_FUNCTION])
+                enabled_tool_names = {t.get("function", {}).get("name") for t in tools if t.get("function", {}).get("name")}
             except Exception as exc:  # noqa: BLE001
                 print("[runtime] 构建函数工具失败，降级为正文调用: " + str(exc))
                 tools = []
-
+        messages = [{"role": "system", "content": system}]
+        if tools:
+            messages.extend(build_messages_from_history(history, user_input, enabled_tool_names=enabled_tool_names)[:-1])
+        else:
+            messages.extend(build_messages_from_history(history, user_input)[:-1])
         for round_index in range(1, max_rounds + 1):
             yield {"event": "round", "index": round_index}
             content = ""

@@ -503,18 +503,31 @@ function saveAssistantMessage() {
     }
   }
   const msg = { role: 'assistant', content: cur.raw || '' };
-  // 如果有工具调用记录，追加到消息中
-  if (cur._toolCalls && cur._toolCalls.length > 0) {
-    msg.tool_calls = cur._toolCalls;
+  // 只保存“有结果”的工具调用；没有结果的 stop/tool_call 不进入历史，避免后端重建 OpenAI tool 消息时残缺。
+  const calls = (cur._toolCalls || []).filter(function (call) {
+    return (cur._pendingToolResults || []).some(function (r) {
+      return r && call && r.tool_call_id && call.id && r.tool_call_id === call.id;
+    });
+  });
+  const results = (cur._pendingToolResults || []).filter(function (r) {
+    return calls.some(function (call) {
+      return r && call && r.tool_call_id && call.id && r.tool_call_id === call.id;
+    });
+  });
+  if (calls.length) {
+    msg.tool_calls = calls.map(function (call) {
+      return { id: call.id, name: call.name, arguments: call.arguments || {} };
+    });
   }
-  if (cur._pendingToolResults && cur._pendingToolResults.length > 0) {
-    // 按 tool_call_id 配对
-    msg.tool_results = cur._pendingToolResults.map(r => ({
-      tool_call_id: r.tool_call_id,
-      tool: r.tool,
-      output: r.output,
-      ok: r.ok
-    }));
+  if (results.length) {
+    msg.tool_results = results.map(function (r) {
+      return {
+        tool_call_id: r.tool_call_id,
+        tool: r.tool,
+        output: r.output || '',
+        ok: r.ok
+      };
+    });
   }
   if (lastAssistantIdx >= 0 && history[lastAssistantIdx]) {
     const existing = history[lastAssistantIdx];
@@ -753,7 +766,7 @@ function handle(ev) {
       const newBlk = cur.blocks[cur.blocks.length - 1];
       if (newBlk && ev.tool_call_id) {
         newBlk._callId = ev.tool_call_id;
-        cur._toolCalls.push({ id: ev.tool_call_id, name: ev.tool, arguments: ev.arguments || {} });
+        (cur._toolCalls || (cur._toolCalls = [])).push({ id: ev.tool_call_id, name: ev.tool, arguments: ev.arguments || {} });
       }
       break;
     case 'tool_end': {
