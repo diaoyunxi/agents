@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """运行时公共设施：工作区沙箱路径解析、文件变更记录。"""
 
 from __future__ import annotations

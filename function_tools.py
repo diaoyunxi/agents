@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """把内置工具 / MCP 工具 / 控制工具转换为 OpenAI function calling（tools 字段）所需 schema。
 
 与 tool_parser 的正文调用协议互不排斥：运行时优先使用函数调用，
