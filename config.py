@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """全局配置中心：负责 config.json 的加载、保存、内存缓存与变更监听。
 
 所有 AI 提供商、工具调用限制、MCP 服务器等配置都保存在 config.json，
@@ -8,22 +9,29 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 BACKUP_DIR = BASE_DIR / ".config_backups"
 
+# 历史上被当作默认口令使用的弱值；检测到这些值时强制轮换，
+# 避免「只判空」漏掉存量部署里残留的 root/root。
+_KNOWN_WEAK_PASSWORDS = {"root", "admin", "password", "passw0rd", "123456", "changeme", "12345678"}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 6573, "workspace": "."},
     "auth": {
         "enabled": True,
-        "username": "root",
-        "password": "root",
+        "username": "admin",
+        "password": "",  # 首次启动时自动生成随机密码，不再硬编码默认凭据
         "setup_done": False,
     },
     "ai": {
@@ -32,6 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_tokens": 8192,
         "temperature": 0.7,
         "timeout": 180,
+        "use_function_calling": True,
     },
     "providers": [],
     "tool_limits": {
@@ -43,7 +52,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allowed_tools": [],
         "require_confirmation": [],
     },
+    "tool_toggles": {},  # 工具允许开关：{工具名: true/false}；缺省视为启用
+    "custom": {},        # 自定义配置：任意键值，工具可通过 tools.get_custom_config() 读取
+    "custom_prompts": [],  # 用户自定义 Prompt：{id, name, content, enabled}
     "mcp_servers": [],
+    "web_search": {
+        "provider": "duckduckgo",
+        "api_key": "",
+        "max_results": 8,
+        "timeout": 20,
+    },
     "ui": {"theme": "dark"},
 }
 
@@ -51,6 +69,9 @@ _lock = threading.RLock()
 _cache: dict[str, Any] = {}
 _cache_mtime: float = 0.0
 _listeners: list[Callable[[dict[str, Any]], None]] = []
+
+# 对话级工作区覆盖：为空表示使用 config.json 中的默认工作区
+_workspace_override: ContextVar[Path | None] = ContextVar("workspace_override", default=None)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -94,6 +115,24 @@ def _backup() -> None:
             old.unlink(missing_ok=True)
     except Exception:  # noqa: BLE001
         pass
+
+
+def ensure_credentials() -> dict[str, Any]:
+    """确保持久化配置中存在有效的认证凭据。
+
+    若 config.json 不存在或 auth.password 为空，则自动生成随机密码并落盘，
+    避免使用硬编码默认凭据带来的安全风险。
+    """
+
+    cfg = load()
+    auth = cfg.get("auth", {})
+    stored = str(auth.get("password") or "")
+    # 存量部署的 config.json 里 password 仍是历史默认弱口令（例如 "root"），
+    # 此时「非空」并不代表安全，只判空会跳过轮换。故一并识别已知弱口令。
+    if not stored or stored.lower() in _KNOWN_WEAK_PASSWORDS:
+        generated = secrets.token_urlsafe(16)
+        cfg = update(lambda c: c.setdefault("auth", {}).update({"password": generated}) or None)
+    return cfg
 
 
 def load(force: bool = False) -> dict[str, Any]:
@@ -173,12 +212,43 @@ def set_value(path: str, value: Any) -> dict[str, Any]:
     return update(_mutate)
 
 
-def workspace_dir() -> Path:
-    ws = Path(get("server.workspace", "."))
+def resolve_workspace(path: str | Path | None = None) -> Path:
+    """把工作区路径解析为绝对路径；相对路径基于程序目录。"""
+
+    raw = str(path).strip() if path is not None else ""
+    ws = Path(raw or ".")
     if not ws.is_absolute():
         ws = (BASE_DIR / ws).resolve()
+    return ws
+
+
+def workspace_dir() -> Path:
+    """返回当前生效的工作区；对话进行中可能被 use_workspace 临时覆盖。"""
+
+    override = _workspace_override.get()
+    ws = override if override is not None else resolve_workspace(get("server.workspace", "."))
     ws.mkdir(parents=True, exist_ok=True)
     return ws
+
+
+@contextmanager
+def use_workspace(path: str | Path | None = None) -> Iterator[Path]:
+    """在上下文内把工作区切换为 path（空值表示沿用默认工作区）。
+
+    仅影响当前请求的任务上下文，多个对话互不干扰。
+    """
+
+    raw = "" if path is None else str(path).strip()
+    if not raw:
+        yield workspace_dir()
+        return
+    resolved = resolve_workspace(raw)
+    resolved.mkdir(parents=True, exist_ok=True)
+    token = _workspace_override.set(resolved)
+    try:
+        yield resolved
+    finally:
+        _workspace_override.reset(token)
 
 
 def tools_dir() -> Path:
@@ -218,5 +288,9 @@ def public_config(include_secrets: bool = False) -> dict[str, Any]:
         server.pop("env", None)
         for item in server.get("headers", {}).keys():
             server["headers"][item] = "***"
+    ws = config.get("web_search", {})
+    if ws.get("api_key"):
+        ws["api_key"] = ""
+        ws["has_api_key"] = True
     config["auth"].pop("password", None)
     return config

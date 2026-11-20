@@ -21,6 +21,16 @@
 </div>
 
 <div class="workspace">
+  <aside class="convos" id="convos">
+    <div class="convos-head">
+      <span class="grow">对话</span>
+      <button class="accent" id="newChat" title="开启新对话">+ 新对话</button>
+    </div>
+    <div class="convos-body" id="convList">
+      <div class="empty">加载中…</div>
+    </div>
+  </aside>
+
   <div class="stage">
     <div class="thread" id="thread">
       <div class="thread-inner">
@@ -42,8 +52,15 @@
 
     <div class="composer">
       <div class="composer-inner">
-        <div class="composer-box">
-          <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        <div class="composer-scope">
+          <span class="meta">工作区</span>
+          <input id="wsInput" placeholder="留空使用默认工作区">
+          <button class="ghost" id="wsDefault" title="恢复默认工作区">默认</button>
+          <span class="hint grow" id="wsReal"></span>
+        </div>
+        <div class="composer-box" style="position:relative">
+          <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行，输入 $ 选择技能"></textarea>
+          <div id="skillPicker" class="skill-picker" style="display:none"></div>
         </div>
         <div class="composer-actions">
           <button class="primary" id="send">发送</button>

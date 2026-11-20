@@ -7,10 +7,67 @@ const history = [];
 let controller = null;
 let cur = null;
 let lastChangeKey = '';
+let saveTimer = null; // 定期保存定时器
+
+/* ---------- 会话管理 ---------- */
+let currentConvId = null;
+let convTitle = '';
+const convListEl = document.getElementById('convList');
 
 function scrollDown() {
   threadEl.scrollTop = threadEl.scrollHeight;
 }
+
+/* 自动跟随滚动：只有当用户已停在底部附近时，流式内容才继续滚到底；
+   用户手动上滑查看历史时不打断（新轮次不再强制拉回底部）。 */
+let pinnedBottom = true;
+function isNearBottom(threshold) {
+  threshold = threshold == null ? 80 : threshold;
+  return threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight <= threshold;
+}
+function refreshPinnedBottom() {
+  pinnedBottom = isNearBottom();
+}
+threadEl.addEventListener('scroll', refreshPinnedBottom);
+function autoScroll() {
+  if (pinnedBottom) scrollDown();
+}
+
+/* ---------- 工作区（每轮对话开始时生效） ---------- */
+let defaultWorkspace = '';
+
+function wsValue() { return document.getElementById('wsInput').value.trim(); }
+
+function paintWorkspaceHint() {
+  const node = document.getElementById('wsReal');
+  const typed = wsValue();
+  const text = typed ? ('本次：' + typed) : (defaultWorkspace ? ('默认：' + defaultWorkspace) : '');
+  node.textContent = text;
+  node.title = text;
+}
+
+function setWorkspaceReal(path) {
+  const node = document.getElementById('wsReal');
+  node.textContent = path ? ('本次：' + path) : '';
+  node.title = node.textContent;
+}
+
+async function loadDefaultWorkspace() {
+  try {
+    const res = await api('/api/health');
+    defaultWorkspace = res.workspace || '';
+  } catch (err) { /* 忽略 */ }
+  const input = document.getElementById('wsInput');
+  input.placeholder = defaultWorkspace ? ('留空使用默认工作区（' + defaultWorkspace + '）') : '留空使用默认工作区';
+  paintWorkspaceHint();
+}
+
+document.getElementById('wsInput').addEventListener('input', function () { paintWorkspaceHint(); });
+document.getElementById('wsDefault').onclick = function () {
+  document.getElementById('wsInput').value = '';
+  paintWorkspaceHint();
+  document.getElementById('wsInput').focus();
+};
 
 /* ---------- 模型选择 ---------- */
 async function loadModels() {
@@ -34,10 +91,17 @@ async function fillModels(pid) {
   const mSel = document.getElementById('modelSel');
   mSel.innerHTML = '';
   const models = res.models && res.models.length ? res.models : [{ id: res.model }];
+  const LABELS = {
+    text_to_image: '文生图', image_to_text: '图生文', image_classification: '图像分类',
+    text_classification: '文本分类', translation: '翻译', text_generation: '文本生成',
+    text_to_speech: '语音合成', automatic_speech_recognition: '语音识别',
+    voice_activity_detection: '语音活动检测', text_embedding: '文本嵌入'
+  };
   models.forEach(function (m) {
     const opt = document.createElement('option');
     opt.value = m.id;
-    opt.textContent = m.name || m.id;
+    const t = m.type || 'text_generation';
+    opt.textContent = (m.name || m.id) + (t !== 'text_generation' ? ' · ' + (LABELS[t] || t) : '');
     if (m.id === res.model) opt.selected = true;
     mSel.appendChild(opt);
   });
@@ -95,16 +159,18 @@ function newAssistant() {
   reasoning.appendChild(reasonBody);
   turn.appendChild(reasoning);
 
-  const calls = el('div', 'calls');
-  turn.appendChild(calls);
+  /* 正文与工具调用按时间顺序混排在同一个内容流中（每轮一个 round-block） */
+  const content = el('div', 'content');
+  turn.appendChild(content);
 
-  const answer = el('div', 'md answer');
-  turn.appendChild(answer);
+  const tail = el('div', 'md tail');
+  turn.appendChild(tail);
 
   threadInner.appendChild(turn);
   scrollDown();
-  return { turn, head, modelBadge, reasoning, reasonBody, calls, answer, answerCur: null,
-    reasonText: '', live: '', round: 0, blocks: [], raw: '' };
+  return { turn, head, modelBadge, reasoning, reasonBody, content, tail, roundBox: null,
+    answerCur: null, reasonText: '', live: '', round: 0, blocks: [], raw: '',
+    _toolCalls: [], _pendingToolResults: [] };
 }
 
 function addToolBlock(call) {
@@ -130,11 +196,98 @@ function addToolBlock(call) {
     args.style.display = open ? 'none' : 'block';
   };
 
-  cur.calls.appendChild(box);
-  scrollDown();
+  (cur.roundBox || cur.content).appendChild(box);
+  autoScroll();
   const rec = { box, state, out };
   cur.blocks.push(rec);
   return rec;
+}
+
+/* ---------- 交互式提问（ask_followup_question） ---------- */
+function addQuestionBlock(ev) {
+  if (!cur) return;
+  const q = ev.question || {};
+  const box = el('div', 'call question');
+  const head = el('div', 'call-head');
+  head.appendChild(el('span', 'tag', '提问'));
+  head.appendChild(el('span', 'nm', ev.tool || 'ask_followup_question'));
+  head.appendChild(el('span', 'grow'));
+  const state = el('span', 'badge blue', '等待回答');
+  head.appendChild(state);
+  box.appendChild(head);
+
+  const body = el('div', 'question-body');
+  body.appendChild(el('div', 'question-text', q.question || ''));
+  const opts = el('div', 'question-options');
+  const chosen = [];
+
+  function submit(labels) {
+    if (box.dataset.done) return;
+    box.dataset.done = '1';
+    state.textContent = '提交中';
+    state.className = 'badge grey';
+    api('/api/question/' + encodeURIComponent(q.id || '') + '/answer',
+      { body: { answer: labels.length === 1 ? labels[0] : labels } })
+      .then(function () {
+        state.textContent = '已回答';
+        state.className = 'badge green';
+        box.classList.add('answered');
+        Array.prototype.forEach.call(opts.querySelectorAll('.q-opt'), function (b) { b.disabled = true; });
+        const sub = body.querySelector('.q-submit');
+        if (sub) sub.disabled = true;
+      })
+      .catch(function (err) {
+        box.dataset.done = '';
+        state.textContent = '回答失败';
+        state.className = 'badge orange';
+        toast(err.message || '回答失败', 'err');
+      });
+  }
+
+  (q.options || []).forEach(function (o) {
+    const label = typeof o === 'string' ? o : (o.label || '');
+    const desc = typeof o === 'string' ? '' : (o.description || '');
+    if (!label) return;
+    const btn = el('button', 'q-opt', label);
+    btn.type = 'button';
+    if (desc) btn.title = desc;
+    btn.onclick = function () {
+      if (box.dataset.done) return;
+      if (q.multi_select) {
+        btn.classList.toggle('picked');
+        const idx = chosen.indexOf(label);
+        if (idx >= 0) chosen.splice(idx, 1); else chosen.push(label);
+      } else {
+        submit([label]);
+      }
+    };
+    opts.appendChild(btn);
+  });
+  body.appendChild(opts);
+
+  if (q.multi_select) {
+    const submitBtn = el('button', 'q-submit', '提交选择');
+    submitBtn.type = 'button';
+    submitBtn.onclick = function () {
+      if (box.dataset.done || !chosen.length) { toast('请先选择至少一个选项', 'err'); return; }
+      submit(chosen.slice());
+    };
+    body.appendChild(submitBtn);
+  }
+
+  box.appendChild(body);
+  (cur.roundBox || cur.content).appendChild(box);
+  autoScroll();
+}
+
+function expireQuestions() {
+  Array.prototype.forEach.call(document.querySelectorAll('.call.question'), function (box) {
+    if (box.dataset.done) return;
+    box.dataset.done = '1';
+    const badge = box.querySelector('.badge');
+    if (badge) { badge.textContent = '已结束'; badge.className = 'badge grey'; }
+    Array.prototype.forEach.call(box.querySelectorAll('.q-opt'), function (b) { b.disabled = true; });
+  });
 }
 
 /* ---------- 文件变更面板 ---------- */
@@ -173,18 +326,395 @@ function renderChanges(list) {
   });
 }
 
+/* ---------- 对话（持久化到后端 chat/） ---------- */
+
+function clearThread() {
+  threadInner.innerHTML = '';
+}
+
+function showIntroPlaceholder() {
+  clearThread();
+  const turn = el('div', 'turn agent');
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', 'Agent'));
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, '就绪'));
+  turn.appendChild(head);
+  const md = el('div', 'md');
+  md.innerHTML = '<p>开始一段新对话，或从左栏选择已有对话继续。</p>';
+  turn.appendChild(md);
+  threadInner.appendChild(turn);
+}
+
+function addUserTurn(text) {
+  const turn = el('div', 'turn user');
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', '你'));
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, now()));
+  turn.appendChild(head);
+  turn.appendChild(el('div', 'user-text', text));
+  threadInner.appendChild(turn);
+  scrollDown();
+}
+
+function addAssistantTurn(message) {
+  const content = message && message.content;
+  const turn = el('div', 'turn agent');
+  const head = el('div', 'turn-head');
+  head.appendChild(el('span', 'role', 'Agent'));
+  head.appendChild(el('span', 'rule'));
+  head.appendChild(el('span', null, ''));
+  turn.appendChild(head);
+  const body = el('div', 'md answer');
+  body.innerHTML = content ? renderMarkdown(content) : '<p class="hint">（无正文输出）</p>';
+  turn.appendChild(body);
+  if (message && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+    message.tool_calls.forEach(function (call) {
+      const box = el('div', 'call');
+      const callHead = el('div', 'call-head');
+      callHead.appendChild(el('span', 'tag', '工具'));
+      callHead.appendChild(el('span', 'nm', call.name || '未知工具'));
+      callHead.appendChild(el('span', 'grow'));
+      callHead.appendChild(el('span', 'badge grey', '历史调用'));
+      const args = el('pre', 'call-body args', JSON.stringify(call.arguments || {}, null, 2));
+      const out = el('pre', 'call-body');
+      out.style.display = 'none';
+      box.appendChild(callHead);
+      box.appendChild(args);
+      box.appendChild(out);
+      callHead.onclick = function () {
+        const open = out.style.display === 'none';
+        out.style.display = open ? 'block' : 'none';
+        args.style.display = open ? 'none' : 'block';
+      };
+      turn.appendChild(box);
+    });
+  }
+  threadInner.appendChild(turn);
+  scrollDown();
+}
+
+async function refreshConversationList() {
+  let list = [];
+  try {
+    const res = await api('/api/conversations');
+    list = res.conversations || [];
+  } catch (err) { /* 忽略 */ }
+  convListEl.innerHTML = '';
+  if (!list.length) {
+    convListEl.appendChild(el('div', 'empty', '还没有对话，点击「+ 新对话」开始'));
+    return;
+  }
+  list.forEach(function (c) {
+    const item = el('div', 'convo');
+    item.dataset.id = c.id;
+    if (c.id === currentConvId) item.classList.add('active');
+    item.appendChild(el('div', 'convo-title', c.title || '新对话'));
+    item.appendChild(el('div', 'convo-meta', (c.updated_at || '') + ' · ' + (c.message_count || 0) + ' 条'));
+    const del = el('button', 'convo-del', '×');
+    del.title = '删除对话';
+    del.onclick = async function (e) {
+      e.stopPropagation();
+      if (!confirm('确定删除该对话？此操作不可恢复。')) return;
+      try {
+        await api('/api/conversations/' + c.id, { method: 'DELETE' });
+        if (currentConvId === c.id) { currentConvId = null; history.length = 0; showIntroPlaceholder(); }
+        await refreshConversationList();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+    item.appendChild(del);
+    item.onclick = function () { loadConversationById(c.id); };
+    convListEl.appendChild(item);
+  });
+}
+
+async function loadConversationById(id) {
+  try {
+    const res = await api('/api/conversations/' + id);
+    currentConvId = res.conversation.id;
+    convTitle = res.conversation.title || '新对话';
+    document.getElementById('wsInput').value = res.conversation.workspace || '';
+    paintWorkspaceHint();
+    history.length = 0;
+    (res.conversation.messages || []).forEach(function (m) {
+      const item = { role: m.role, content: m.content };
+      if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
+        item.tool_calls = m.tool_calls.map(function (c) {
+          const call = { id: c.id, name: c.name, arguments: c.arguments };
+          return call;
+        });
+      }
+      if (Array.isArray(m.tool_results) && m.tool_results.length) {
+        item.tool_results = m.tool_results.map(function (r) {
+          return { tool_call_id: r.tool_call_id, tool: r.tool, output: r.output, ok: r.ok };
+        });
+      }
+      history.push(item);
+    });
+    clearThread();
+    if (!history.length) { showIntroPlaceholder(); }
+    else {
+      history.forEach(function (m) {
+        if (m.role === 'user') addUserTurn(m.content);
+        else addAssistantTurn(m);
+      });
+    }
+    await refreshConversationList();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function ensureConversation() {
+  if (currentConvId) return currentConvId;
+  const res = await api('/api/conversations', { body: { workspace: wsValue() } });
+  currentConvId = res.conversation.id;
+  convTitle = res.conversation.title || '新对话';
+  await refreshConversationList();
+  return currentConvId;
+}
+
+function currentTitle() {
+  if (convTitle && convTitle !== '新对话') return convTitle;
+  const first = history.find(function (m) { return m.role === 'user'; });
+  return first ? first.content.slice(0, 24) : '新对话';
+}
+
+async function saveConversation() {
+  if (!currentConvId) return;
+  convTitle = currentTitle();
+  try {
+    await api('/api/conversations/' + currentConvId, {
+      method: 'PUT',
+      body: { messages: history, title: convTitle, workspace: wsValue() },
+    });
+    await refreshConversationList();
+  } catch (err) { /* 静默保存失败 */ }
+}
+
+// 收集当前 assistant 消息的完整结构（含 tool_calls 和 tool_results）
+function saveAssistantMessage() {
+  if (!cur || (!cur.raw && !(cur._toolCalls && cur._toolCalls.length))) return;
+  // 找到 history 中最后一条 assistant 消息并更新它
+  let lastAssistantIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === 'assistant') {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  const msg = { role: 'assistant', content: cur.raw || '' };
+  // 如果有工具调用记录，追加到消息中
+  if (cur._toolCalls && cur._toolCalls.length > 0) {
+    msg.tool_calls = cur._toolCalls;
+  }
+  if (cur._pendingToolResults && cur._pendingToolResults.length > 0) {
+    // 按 tool_call_id 配对
+    msg.tool_results = cur._pendingToolResults.map(r => ({
+      tool_call_id: r.tool_call_id,
+      tool: r.tool,
+      output: r.output,
+      ok: r.ok
+    }));
+  }
+  if (lastAssistantIdx >= 0 && history[lastAssistantIdx]) {
+    const existing = history[lastAssistantIdx];
+    if (msg.tool_calls && msg.tool_calls.length) {
+      existing.tool_calls = (existing.tool_calls || []).concat(msg.tool_calls);
+    }
+    if (msg.tool_results && msg.tool_results.length) {
+      existing.tool_results = (existing.tool_results || []).concat(msg.tool_results);
+    }
+    if (!existing.content) existing.content = msg.content || '';
+  } else {
+    history.push(msg);
+  }
+  // 清空暂存
+  cur._toolCalls = [];
+  cur._pendingToolResults = [];
+  // 立即保存
+  saveConversation();
+}
+
+// 定期保存（每 30 秒）
+function startPeriodicSave() {
+  stopPeriodicSave();
+  saveTimer = setInterval(function() {
+    if (controller) saveConversation();
+  }, 30000);
+}
+
+function stopPeriodicSave() {
+  if (saveTimer) {
+    clearInterval(saveTimer);
+    saveTimer = null;
+  }
+}
+
+document.addEventListener('beforeunload', function(e) {
+  if (controller || history.length > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+    saveConversation();
+  }
+});
+
+document.getElementById('newChat').onclick = async function () {
+  currentConvId = null;
+  convTitle = '';
+  history.length = 0;
+  document.getElementById('wsInput').value = '';
+  paintWorkspaceHint();
+  await ensureConversation();
+  showIntroPlaceholder();
+  document.getElementById('input').focus();
+};
+
+/* ---------- 技能 $ 选择器 ---------- */
+let skillList = [];   // [{name, description, when_to_use}]
+let skillSet = {};     // name -> true
+
+async function loadSkillList() {
+  try {
+    const res = await api('/api/skills?slim=true');
+    skillList = res.skills || [];
+    skillSet = {};
+    skillList.forEach(function (s) { skillSet[s.name] = true; });
+  } catch (err) { skillList = []; }
+}
+
+function extractSkillNames(text) {
+  // 按空白切分 token，挑出「$ 后紧跟的已知技能名」。避免依赖变长 lookbehind。
+  const found = [];
+  String(text || '').split(/\s+/).forEach(function (tok) {
+    if (tok.charAt(0) !== '$') return;
+    const name = tok.slice(1).replace(/[.,;:!?、。；，！？()（）\[\]【】"']+/g, '').toLowerCase();
+    if (name && skillSet[name] && found.indexOf(name) < 0) found.push(name);
+  });
+  return found;
+}
+
+function positionPicker() {
+  // picker 位于 .composer-box（position:relative）内部，绝对定位贴在其底边下方
+  const picker = document.getElementById('skillPicker');
+  picker.style.left = '10px';
+  picker.style.top = '100%';
+}
+
+function renderPicker(filter) {
+  const picker = document.getElementById('skillPicker');
+  picker.innerHTML = '';
+  picker.dataset.active = '0';
+  const f = (filter || '').toLowerCase();
+  const matches = skillList.filter(function (s) {
+    if (!f) return true;
+    return s.name.indexOf(f) >= 0 || (s.description || '').toLowerCase().indexOf(f) >= 0;
+  }).slice(0, 20);
+  if (!matches.length) {
+    picker.appendChild(el('div', 'skill-picker-empty', skillList.length ? '无匹配技能' : '技能库为空'));
+    return;
+  }
+  matches.forEach(function (s) {
+    const item = el('div', 'skill-picker-item');
+    item.dataset.name = s.name;
+    item.appendChild(el('span', 'sk-name', '$' + s.name));
+    const desc = el('span', 'sk-desc', (s.description || s.when_to_use || '').slice(0, 60));
+    item.appendChild(desc);
+    item.onclick = function () { insertSkill(s.name); };
+    picker.appendChild(item);
+  });
+  picker.style.display = 'block';
+}
+
+function closePicker() {
+  document.getElementById('skillPicker').style.display = 'none';
+}
+
+function insertSkill(name) {
+  const input = document.getElementById('input');
+  const start = input.selectionStart;
+  // 替换从最近一个行首/空白后的 $ 到光标之间的片段
+  const before = input.value.slice(0, start);
+  const seg = before.match(/(?:^|(?<=\s))\$[a-z0-9-]*$/i);
+  let replaceFrom = start;
+  if (seg) replaceFrom = start - seg[0].length;
+  const tail = input.value.slice(start);
+  input.value = input.value.slice(0, replaceFrom) + '$' + name + ' ' + tail;
+  const pos = replaceFrom + name.length + 2;
+  input.focus();
+  input.setSelectionRange(pos, pos);
+  closePicker();
+}
+
+// 监听输入：检测 $ 触发浮层
+(function bindSkillPicker() {
+  const input = document.getElementById('input');
+  input.addEventListener('input', function () {
+    const caret = input.selectionStart;
+    const before = input.value.slice(0, caret);
+    const seg = before.match(/(?:^|(?<=\s))\$([a-z0-9-]*)$/i);
+    if (seg && skillList.length) {
+      positionPicker();
+      renderPicker(seg[1]);
+    } else {
+      closePicker();
+    }
+  });
+  input.addEventListener('keydown', function (e) {
+    const picker = document.getElementById('skillPicker');
+    if (picker.style.display === 'block') {
+      const items = Array.prototype.slice.call(picker.querySelectorAll('.skill-picker-item'));
+      const idx = parseInt(picker.dataset.active || '0', 10);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = Math.min(idx + 1, items.length - 1);
+        picker.dataset.active = next;
+        highlight(items, next);
+      }
+      else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = Math.max(idx - 1, 0);
+        picker.dataset.active = prev;
+        highlight(items, prev);
+      }
+      else if (e.key === 'Enter' && items.length && !e.shiftKey) {
+        e.preventDefault();
+        const active = items[Math.min(idx, items.length - 1)];
+        insertSkill(active.dataset.name);
+      }
+      else if (e.key === 'Escape') { closePicker(); }
+    }
+  });
+  document.addEventListener('click', function (e) {
+    if (!document.getElementById('skillPicker').contains(e.target) && e.target.id !== 'input') closePicker();
+  });
+
+  function highlight(items, active) {
+    items.forEach(function (it, i) { it.classList.toggle('active', i === active); });
+  }
+})();
+
 /* ---------- SSE 会话 ---------- */
 function handle(ev) {
   switch (ev.event) {
     case 'start':
       cur.modelBadge.textContent = ev.model;
       document.getElementById('status').textContent = ev.provider + ' · ' + ev.model;
+      if (ev.workspace) setWorkspaceReal(ev.workspace);
+      if (ev.skill_note) {
+        const sk = el('div', 'skill-note');
+        sk.title = ev.skill_note;
+        const loaded = (ev.skills && ev.skills.length) ? ev.skills.join('、') : '（未加载技能）';
+        sk.innerHTML = '技能：' + escapeHtml(loaded);
+        cur.head.appendChild(sk);
+      }
       break;
     case 'round': {
       cur.round = ev.index;
       cur.live = '';
+      cur.roundBox = el('div', 'round-block');
       cur.answerCur = el('div', 'md round');
-      cur.answer.appendChild(cur.answerCur);
+      cur.roundBox.appendChild(cur.answerCur);
+      cur.content.appendChild(cur.roundBox);
       break;
     }
     case 'thinking': {
@@ -198,12 +728,12 @@ function handle(ev) {
       cur.live += ev.content;
       if (cur.answerCur) {
         cur.answerCur.innerHTML = '<span class="badge grey">输出中</span> ' + escapeHtml(cur.live.slice(-1500));
-        scrollDown();
+        autoScroll();
       }
       break;
     case 'message': {
       const text = (ev.segments || []).filter(s => s.type === 'text').map(s => s.content).join('\n');
-      const target = cur.answerCur || cur.answer;
+      const target = cur.answerCur || cur.roundBox || cur.content;
       let html = text ? renderMarkdown(text)
         : (ev.tool_calls ? '<p class="hint">（本轮仅发起工具调用）</p>' : '<p class="hint">（无正文输出）</p>');
       if (ev.parse_errors) {
@@ -212,14 +742,19 @@ function handle(ev) {
       }
       target.innerHTML = html;
       cur.raw += (ev.raw || '');
-      scrollDown();
+      // 开始新轮次时标记一轮结束，保存当前 assistant 消息
+      if (cur.round > 1) saveAssistantMessage();
+      autoScroll();
       break;
     }
-    case 'parse_error':
-      toast('工具调用 JSON 解析失败：' + (ev.error || ''), 'err');
-      break;
     case 'tool_start':
       addToolBlock(ev);
+      // 记录工具调用信息，等待 tool_end 配对
+      const newBlk = cur.blocks[cur.blocks.length - 1];
+      if (newBlk && ev.tool_call_id) {
+        newBlk._callId = ev.tool_call_id;
+        cur._toolCalls.push({ id: ev.tool_call_id, name: ev.tool, arguments: ev.arguments || {} });
+      }
       break;
     case 'tool_end': {
       const blk = cur.blocks[cur.blocks.length - 1];
@@ -228,9 +763,19 @@ function handle(ev) {
         blk.state.className = 'badge ' + (ev.ok ? 'green' : 'orange');
         blk.out.textContent = ev.output || '(无输出)';
         if (!ev.ok) blk.box.classList.add('fail');
+        // 记录 tool_result 到待保存列表
+        (cur._pendingToolResults || (cur._pendingToolResults = [])).push({
+          tool_call_id: ev.tool_call_id || blk._callId,
+          tool: ev.tool,
+          output: ev.output || '',
+          ok: ev.ok
+        });
       }
       break;
     }
+    case 'question':
+      addQuestionBlock(ev);
+      break;
     case 'changes':
       renderChanges(ev.changes || []);
       break;
@@ -238,17 +783,27 @@ function handle(ev) {
       toast(ev.message, 'err');
       break;
     case 'limit':
-      cur.answer.innerHTML += '<p class="hint">' + escapeHtml(ev.message) + '</p>';
+      cur.tail.innerHTML += '<p class="hint">' + escapeHtml(ev.message) + '</p>';
+      break;
+    case 'stopped':
+      cur.tail.innerHTML += '<p class="hint">' + escapeHtml(ev.message || '已结束') + '</p>';
       break;
     case 'error':
-      cur.answer.innerHTML += '<p style="color:#b2492f">错误：' + escapeHtml(ev.message) + '</p>';
+      cur.tail.innerHTML += '<p style="color:#b2492f">错误：' + escapeHtml(ev.message) + '</p>';
       break;
-    case 'end':
+    case 'end': {
       if (ev.changes) renderChanges(ev.changes);
-      cur.answer.innerHTML += '<div class="hint" style="margin-top:12px">轮次 ' + cur.round +
-        ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' + (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
-      if (cur.raw) history.push({ role: 'assistant', content: cur.raw });
+      expireQuestions();
+      const reasonText = { stopped: '模型主动结束', idle: '未推进而结束',
+        max_rounds: '达到轮数上限', parse_failed: '解析失败结束',
+        error: '出错结束', completed: '完成' }[ev.reason] || ev.reason || '完成';
+      cur.tail.innerHTML += '<div class="hint" style="margin-top:12px">' + escapeHtml(reasonText) +
+        ' · 轮次 ' + cur.round + ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' +
+        (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
+      // 保存完整的 assistant 消息（包含 tool_calls 和 tool_results）
+      saveAssistantMessage();
       break;
+    }
   }
 }
 
@@ -256,6 +811,7 @@ async function send() {
   const input = document.getElementById('input');
   const text = input.value.trim();
   if (!text || controller) return;
+  try { await ensureConversation(); } catch (err) { /* 保存不可用时仍可对话 */ }
   input.value = '';
 
   const turn = el('div', 'turn user');
@@ -266,11 +822,16 @@ async function send() {
   turn.appendChild(head);
   turn.appendChild(el('div', 'user-text', text));
   threadInner.appendChild(turn);
+  pinnedBottom = true; // 新一轮提问：重新自动跟随
   scrollDown();
   history.push({ role: 'user', content: text });
 
+  // 从消息中提取 $skillname 提及；无提及则传 null 让后端自动选择技能
+  const mentionedSkills = extractSkillNames(text);
+
   cur = newAssistant();
   controller = new AbortController();
+  closePicker();
   document.getElementById('send').style.display = 'none';
   document.getElementById('stop').style.display = 'inline-block';
   document.getElementById('status').innerHTML = '<span class="spinner"></span> 生成中';
@@ -283,7 +844,9 @@ async function send() {
         message: text,
         history: history.slice(0, -1),
         provider_id: document.getElementById('providerSel').value,
-        model: document.getElementById('modelSel').value
+        model: document.getElementById('modelSel').value,
+        workspace: wsValue(),
+        skills: mentionedSkills.length ? mentionedSkills : null
       }),
       signal: controller.signal
     });
@@ -307,10 +870,11 @@ async function send() {
       }
     }
   } catch (err) {
-    cur.answer.innerHTML += '<p style="color:#b2492f">' + escapeHtml(err.message) + '</p>';
+    cur.tail.innerHTML += '<p style="color:#b2492f">' + escapeHtml(err.message) + '</p>';
   } finally {
     controller = null;
     cur = null;
+    stopPeriodicSave(); // SSE 结束，停止定时器
     document.getElementById('send').style.display = 'inline-block';
     document.getElementById('stop').style.display = 'none';
     document.getElementById('status').textContent = '';
@@ -319,11 +883,13 @@ async function send() {
   }
 }
 
-document.getElementById('send').onclick = send;
-document.getElementById('stop').onclick = function () { if (controller) controller.abort(); };
-document.getElementById('input').addEventListener('keydown', function (e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-});
+document.getElementById('send').onclick = async function () {
+  startPeriodicSave();
+  await send();
+};
 
 loadModels().catch(err => toast(err.message, 'err'));
+refreshConversationList().catch(err => toast(err.message, 'err'));
+loadDefaultWorkspace().catch(err => toast(err.message, 'err'));
+loadSkillList().catch(function () { /* 技能列表加载失败时 $ 选择器不可用，主任务不受影响 */ });
 
