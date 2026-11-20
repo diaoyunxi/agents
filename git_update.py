@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Git 自更新支持：检查远端新提交，并以“分离进程”方式触发更新与重启。
 
 设计原则：
@@ -46,6 +47,13 @@ def _env() -> dict:
     return env
 
 
+def _no_window_flags() -> int:
+    """Windows 上子进程不创建控制台窗口，避免一闪而过的黑框。"""
+    if os.name == "nt":
+        return subprocess.CREATE_NO_WINDOW
+    return 0
+
+
 def _git(args: list[str], timeout: float = 30.0, cwd: Path | None = None) -> tuple[int, str, str]:
     """执行 git 命令，返回 (returncode, stdout, stderr)。"""
     try:
@@ -55,6 +63,7 @@ def _git(args: list[str], timeout: float = 30.0, cwd: Path | None = None) -> tup
             capture_output=True,
             timeout=timeout,
             env=_env(),
+            creationflags=_no_window_flags(),
         )
     except FileNotFoundError:
         return -1, "", "未找到 git 命令，请先安装 Git 并加入 PATH"
@@ -249,24 +258,22 @@ def start_update(delay: float = 2.0) -> dict:
         "--port", str(_server_port()),
         "--delay", str(delay),
     ]
-    log_handle = open(LOG_FILE, "a", encoding="utf-8")
-    log_handle.write("\n===== {} 触发更新 (old_pid={}) =====\n".format(
-        time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid()))
-    log_handle.flush()
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(BASE_DIR),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            creationflags=_detach_flags(),
-        )
-    except Exception as exc:  # noqa: BLE001
-        _updating = False
-        log_handle.close()
-        return {"ok": False, "message": "启动更新进程失败：{}".format(exc)}
-    log_handle.close()
+    with open(LOG_FILE, "a", encoding="utf-8") as log_handle:
+        log_handle.write("\n===== {} 触发更新 (old_pid={}) =====\n".format(
+            time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid()))
+        log_handle.flush()
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(BASE_DIR),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=_detach_flags(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _updating = False
+            return {"ok": False, "message": "启动更新进程失败：{}".format(exc)}
     return {"ok": True, "message": "已启动更新进程", "updater_pid": proc.pid}
 
 

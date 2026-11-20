@@ -11,3 +11,10 @@ chat/
 .updater_result.json
 # 反向代理拉取的第三方参考项目（只读参考，不纳入版本库）
 _ref_*/
+.plan/
+.tmp_loader_head.py
+_check_tool_sig.py
+_repro_tool_err.py
+_verify_real_backoff.py
+test_429_backoff.py
+test_tool_history_persistence.py

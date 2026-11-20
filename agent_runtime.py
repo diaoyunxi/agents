@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """对话运行时：模型输出 -> 解析工具调用 -> 执行工具 -> 回灌结果。
 
 以异步生成器产出事件，供后端 SSE 推送给前端：
@@ -14,6 +15,7 @@ import uuid
 import ai_client
 import config
 import function_tools
+import interaction
 import mcp_manager
 import prompt_builder
 import tool_parser
@@ -53,6 +55,11 @@ def _check_allowed(name: str, limits: dict) -> str:
     """返回空串表示允许，否则返回拒绝原因。`stop` 是控制信号，永远放行。"""
     if name == STOP_TOOL:
         return ""
+    # 检查 tool_toggles 开关
+    import config
+    toggles = config.get("tool_toggles", {}) or {}
+    if toggles.get(name) is False:
+        return "工具 `{0}` 已被停用（可在设置页重新启用）".format(name)
     if not limits.get("enabled", True):
         return ""
     allowed = limits.get("allowed_tools") or []
@@ -82,6 +89,26 @@ PARSE_ERROR_GUIDE = (
 )
 
 
+def _tool_message(tool_call_id: str, output: str, images: list) -> dict:
+    """组装回灌给模型的 tool 消息；带图片时用多模态 content 数组。"""
+
+    text = str(output or "")[:20000]
+    if images:
+        parts: list = [{"type": "text", "text": text}]
+        for img in images[:4]:
+            url = f"data:{img.get('media_type', 'image/png')};base64,{img.get('data', '')}"
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        return {"role": "tool", "tool_call_id": tool_call_id, "content": parts}
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": text}
+
+
+async def _ask_and_wait(outcome: dict) -> str:
+    """ask_followup_question：挂起等待用户回答，返回回答文本。"""
+
+    question = outcome.get("question") or {}
+    return await interaction.wait(question.get("id", ""), int(question.get("timeout", 600)))
+
+
 def _format_results(results: list) -> str:
     lines = ["[工具执行结果]"]
     has_parse_error = False
@@ -93,6 +120,9 @@ def _format_results(results: list) -> str:
         lines.append("- 工具 `{0}`：{1}".format(item["tool"], flag))
         lines.append("  参数: {0}".format(json.dumps(item.get("arguments", {}), ensure_ascii=False)[:500]))
         lines.append("  输出: {0}".format(str(item.get("output", ""))[:6000]))
+        for img in (item.get("images") or [])[:1]:
+            lines.append("  图片: {0}（已读取；正文调用协议无法回灌图像，"
+                         "如需模型查看请改用函数调用或描述关键内容）".format(img.get("media_type", "image")))
     if has_parse_error:
         lines.append("注意：上述工具调用因为 JSON 不合法而**没有被执行**，请修正格式后重发。")
         lines.append(PARSE_ERROR_GUIDE)
@@ -102,8 +132,15 @@ def _format_results(results: list) -> str:
     return "\n".join(lines)
 
 
-async def run_chat(user_input, history=None, provider_id="", model=""):
-    """执行一轮完整对话，产出事件字典流。"""
+async def run_chat(user_input, history=None, provider_id="", model="", skill_names=None):
+    """执行一轮完整对话，产出事件字典流。
+
+    `skill_names`:
+      - 列表 → 按指定技能加载
+      - None → 自动选择（调用 skill_selector）
+    """
+    import skill_selector
+
     history = history or []
     limits = _limits()
     enabled = limits.get("enabled", True)
@@ -113,13 +150,54 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
 
     provider, chosen_model = resolve_provider(provider_id, model)
     await mcp_manager.refresh_prompt()
-    system = prompt_builder.build_system_prompt() + "\n\n" + prompt_builder.build_user_context()
+    model_type = ai_client.model_type_of(provider, chosen_model)
+
+    # 技能路由：用户明确指定 → 直接用；未指定 → 独立模型请求选择
+    if skill_names is not None:
+        selected_skills = skill_names
+        skill_note = "用户指定技能: " + (", ".join(selected_skills) if selected_skills else "（无）")
+    else:
+        sel = await skill_selector.select_skills(user_input, provider_id, model)
+        selected_skills = sel["skills"]
+        skill_note = sel.get("note", "")
+
+    system = prompt_builder.build_system_prompt(skill_names=selected_skills) + "\n\n" + prompt_builder.build_user_context()
 
     messages = [{"role": "system", "content": system}]
     for item in history:
         role = item.get("role")
-        if role in ("user", "assistant") and item.get("content"):
-            messages.append({"role": role, "content": item["content"]})
+        content = item.get("content")
+        if role in ("user", "assistant") and (content or item.get("tool_calls") or item.get("tool_results")):
+            if role == "assistant" and item.get("tool_calls"):
+                tool_results = item.get("tool_results") or []
+                result_by_id = {
+                    str(r.get("tool_call_id") or ""): str(r.get("output") or "")
+                    for r in tool_results if isinstance(r, dict)
+                }
+                messages.append({
+                    "role": role,
+                    "content": content if isinstance(content, str) and content else None,
+                    "tool_calls": [
+                        {
+                            "id": str(tc.get("id") or "call_{0}".format(uuid.uuid4().hex[:12])),
+                            "type": "function",
+                            "function": {
+                                "name": str(tc.get("name") or ""),
+                                "arguments": json.dumps(tc.get("arguments") or {}, ensure_ascii=False),
+                            },
+                        }
+                        for tc in item["tool_calls"]
+                        if isinstance(tc, dict)
+                    ],
+                })
+                for tc in item["tool_calls"]:
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = str(tc.get("id") or "")
+                    if tc_id in result_by_id:
+                        messages.append(_tool_message(tc_id, result_by_id[tc_id], []))
+            else:
+                messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": user_input})
 
     started = time.time()
@@ -128,7 +206,10 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
         "session_id": uuid.uuid4().hex[:12],
         "provider": provider.get("name") or provider.get("id"),
         "model": chosen_model,
+        "model_type": model_type,
         "workspace": str(config.workspace_dir()),
+        "skills": selected_skills,
+        "skill_note": skill_note,
         "limits": {
             "max_rounds": max_rounds,
             "max_total_calls": max_total,
@@ -146,8 +227,10 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
         tools = []
         if config.get("ai.use_function_calling", True):
             try:
-                builtin = tool_loader.list_tools()
+                builtin = tool_loader.list_enabled_tools()
                 mcp_tools = await mcp_manager.list_all_tools()
+                toggles = config.get("tool_toggles", {}) or {}
+                mcp_tools = [t for t in mcp_tools if toggles.get(t.get("name", ""), True) is not False]
                 tools = function_tools.build_function_tools(builtin, mcp_tools, [function_tools.STOP_FUNCTION])
             except Exception as exc:  # noqa: BLE001
                 print("[runtime] 构建函数工具失败，降级为正文调用: " + str(exc))
@@ -256,11 +339,19 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                             continue
                         total_calls += 1
                         round_calls += 1
-                    yield {"event": "tool_start", "tool": name, "arguments": args, "thought": ""}
+                    yield {"event": "tool_start", "tool": name, "arguments": args, "thought": "", "tool_call_id": nc["id"]}
                     outcome = await _dispatch(name, args)
                     outcome = dict(outcome)
                     outcome["tool"] = name
                     outcome["arguments"] = args
+
+                    # 交互式提问：先推送问题卡片，再挂起等待用户点击选项
+                    if outcome.get("question"):
+                        question = outcome["question"]
+                        yield {"event": "question", "tool": name, "question": question}
+                        answer = await _ask_and_wait(outcome)
+                        outcome["output"] = "用户的选择: {0}".format(answer)
+
                     yield {
                         "event": "tool_end",
                         "tool": name,
@@ -269,11 +360,8 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                         "output": str(outcome.get("output", ""))[:20000],
                     }
                     yield {"event": "changes", "changes": collector.snapshot()}
-                    tool_messages.append({
-                        "role": "tool",
-                        "tool_call_id": nc["id"],
-                        "content": str(outcome.get("output", ""))[:20000],
-                    })
+                    tool_messages.append(_tool_message(
+                        nc["id"], outcome.get("output", ""), outcome.get("images") or []))
                     if outcome.get("stop_task"):
                         stopped = True
                         stop_detail = str(args.get("reason") or outcome.get("reason") or "").strip()
@@ -358,6 +446,14 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
                 if call.get("repaired"):
                     outcome["output"] = "（你输出的 JSON 格式有误，已自动修复后执行；下次请严格合法）\n{0}".format(
                         outcome.get("output", ""))
+
+                # 交互式提问：推送问题卡片并挂起等待用户回答
+                if outcome.get("question"):
+                    question = outcome["question"]
+                    yield {"event": "question", "tool": name, "question": question}
+                    answer = await _ask_and_wait(outcome)
+                    outcome["output"] = "用户的选择: {0}".format(answer)
+
                 results.append(outcome)
                 yield {
                     "event": "tool_end",
@@ -382,6 +478,9 @@ async def run_chat(user_input, history=None, provider_id="", model=""):
         else:
             stop_reason = "max_rounds"
             yield {"event": "limit", "message": "已达到最大交互轮数 {0}，请让用户继续追问。".format(max_rounds)}
+
+    # 对话结束：唤醒所有仍挂起的提问，避免工具永远等待
+    interaction.cancel_all("对话已结束")
 
     yield {
         "event": "end",

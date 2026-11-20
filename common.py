@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """运行时公共设施：工作区沙箱路径解析、文件变更记录。"""
 
 from __future__ import annotations
@@ -7,7 +8,7 @@ import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -78,7 +79,7 @@ class FileChange:
     diff: str = ""
     before: str = ""
     after: str = ""
-    time: str = field(default_factory=lambda: datetime.now().strftime("%H:%M:%S"))
+    time: str = field(default_factory=lambda: datetime.now(tz=timezone.utc).strftime("%H:%M:%S"))
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -158,6 +159,22 @@ def record_change(path: str | Path, action: str, before: str = "", after: str = 
         path=rel, action=action, language=lang, additions=add, deletions=dele,
         diff=diff, before=before, after=after,
     )
+    # 同一 path 已有记录时原地更新，避免重复条目；
+    # 保留该文件第一次的 before（原始状态），只更新 after，
+    # 使 diff 始终反映整轮累计净变化（如 create 后又 modify）。
+    existing = next((c for c in bucket if c.path == rel), None)
+    if existing is not None:
+        existing.action = action
+        existing.language = lang
+        existing.after = after
+        if action == "delete":
+            existing.diff, existing.additions, existing.deletions = _make_diff(rel, existing.before, "")
+        elif existing.before or existing.after:
+            existing.diff, existing.additions, existing.deletions = _make_diff(rel, existing.before, existing.after, lang)
+        else:
+            existing.diff, existing.additions, existing.deletions = "", 0, 0
+        existing.time = change.time
+        return existing
     bucket.append(change)
     return change
 

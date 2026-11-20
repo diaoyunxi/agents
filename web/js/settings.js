@@ -31,7 +31,9 @@ function paintAll() {
   paintModel();
   paintLimits();
   paintTools();
+  paintCustomCfg();
   paintMcp();
+  paintCustomPrompts();
   paintParams();
   paintSys();
 }
@@ -78,7 +80,17 @@ function paintProviders() {
     if (p.id === cfg.ai.active_provider_id) opt.selected = true;
     sel.appendChild(opt);
   });
-  paintModelList((cfg.providers.find(p => p.id === cfg.ai.active_provider_id) || {}).models || []);
+}
+
+/* ---------- 模型 ---------- */
+function modelsOf(pid) {
+  const p = (cfg.providers || []).find(x => x.id === pid);
+  return (p && p.models) || [];
+}
+
+/* 始终按「当前在 mProv 中选中的提供商」渲染模型列表，而不是写死 active_provider */
+function syncModelList() {
+  paintModelList(modelsOf(document.getElementById('mProv').value));
 }
 
 document.getElementById('resetForm').onclick = function () {
@@ -121,9 +133,26 @@ document.getElementById('testBtn').onclick = async function () {
 
 /* ---------- 模型 ---------- */
 let allModels = [];
+const MODEL_TYPE_LABELS = {
+  text_to_image: '文生图', image_to_text: '图生文', image_classification: '图像分类',
+  text_classification: '文本分类', translation: '翻译', text_generation: '文本生成',
+  text_to_speech: '语音合成', automatic_speech_recognition: '语音识别',
+  voice_activity_detection: '语音活动检测', text_embedding: '文本嵌入'
+};
+
+function modelTypeOf(m, pid) {
+  pid = pid || document.getElementById('mProv').value;
+  const p = (cfg.providers || []).find(x => x.id === pid);
+  const overrides = (p && p.model_type_overrides) || {};
+  if (m.id in overrides) return overrides[m.id];
+  return m.type || 'text_generation';
+}
 
 function paintModelList(models) {
   allModels = models || [];
+  const pid = document.getElementById('mProv').value;
+  const p = (cfg.providers || []).find(x => x.id === pid);
+  const overrides = (p && p.model_type_overrides) || {};
   const box = document.getElementById('mList');
   const keyword = (document.getElementById('mSearch').value || '').toLowerCase();
   box.innerHTML = '';
@@ -136,17 +165,50 @@ function paintModelList(models) {
     if (m.id === cfg.ai.active_model) input.checked = true;
     label.appendChild(input);
     label.appendChild(el('span', null, m.id));
+    const t = modelTypeOf(m);
+    const manual = m.id in overrides;
+    const badge = el('span', 'badge type-badge' + (manual ? ' manual' : ''),
+      (MODEL_TYPE_LABELS[t] || t) + (manual ? '（手动）' : ''));
+    badge.title = '模型类型：' + t + '（点击可手动修改）';
+    badge.style.cursor = 'pointer';
+    badge.onclick = function () { changeModelType(m.id, t); };
+    label.appendChild(badge);
     box.appendChild(label);
   });
 }
 
+async function changeModelType(modelId, currentType) {
+  const pid = document.getElementById('mProv').value;
+  const p = (cfg.providers || []).find(x => x.id === pid);
+  const overrides = (p && p.model_type_overrides) || {};
+  const options = Object.keys(MODEL_TYPE_LABELS).map(k => k).join('\n');
+  const sel = prompt('选择「' + modelId + '」的模型类型（留空=自动识别）：\n' +
+    Object.keys(MODEL_TYPE_LABELS).map((k, i) => (i + 1) + '. ' + MODEL_TYPE_LABELS[k] + ' (' + k + ')').join('\n') +
+    '\n\n输入序号 1-' + Object.keys(MODEL_TYPE_LABELS).length + '，或留空清除手动设置');
+  if (sel === null) return;
+  const idx = parseInt(sel, 10);
+  let next = '';
+  if (!isNaN(idx) && idx >= 1 && idx <= Object.keys(MODEL_TYPE_LABELS).length) {
+    next = Object.keys(MODEL_TYPE_LABELS)[idx - 1];
+  }
+  try {
+    await api('/api/providers/' + pid + '/models/type', { body: { model: modelId, type: next } });
+    await reload();
+    document.getElementById('mProv').value = pid;
+    syncModelList();
+    toast(next ? ('类型已设为 ' + (MODEL_TYPE_LABELS[next] || next)) : '已恢复自动识别', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
+}
+
 function paintModel() {
-  const p = cfg.providers.find(x => x.id === cfg.ai.active_provider_id) || {};
   document.getElementById('mHint').textContent = '当前默认模型：' + (cfg.ai.active_model || '未设置');
-  paintModelList(p.models || []);
+  syncModelList();
 }
 
 document.getElementById('mSearch').oninput = function () { paintModelList(allModels); };
+
+/* 在「模型与默认」页手动切换提供商下拉框时，立即刷新对应模型列表 */
+document.getElementById('mProv').onchange = function () { syncModelList(); };
 
 document.getElementById('fetchModels').onclick = async function () {
   const pid = document.getElementById('mProv').value;
@@ -156,6 +218,7 @@ document.getElementById('fetchModels').onclick = async function () {
     const res = await api('/api/providers/' + pid + '/models', { body: {} });
     await reload();
     document.getElementById('mProv').value = pid;
+    syncModelList();
     toast('获取到 ' + res.count + ' 个模型', 'ok');
   } catch (err) { toast(err.message, 'err'); }
   finally { this.disabled = false; }
@@ -218,17 +281,22 @@ document.getElementById('saveLimits').onclick = async function () {
   toast('已保存并立即生效', 'ok');
 };
 
+/* ---------- 工具开关 ---------- */
+let _toolNames = [];
+
 function paintTools() {
   const box = document.getElementById('toolList');
   box.innerHTML = '';
   fetch('/api/tools').then(r => r.json()).then(function (res) {
     const tools = res.tools || [];
+    _toolNames = tools.map(t => t.name);
     document.getElementById('toolCount').textContent = tools.length;
     if (!tools.length) { box.innerHTML = '<div class="empty">tools/ 目录下没有可用工具</div>'; return; }
     tools.forEach(function (t) {
       const row = el('div', 'list-row');
       const g = el('div', 'grow');
       g.appendChild(el('div', 'nm', t.name));
+      if (t.enabled === false) g.appendChild(el('span', 'badge', '已停用'));
       if (t.dangerous) g.appendChild(el('span', 'badge orange', '高风险'));
       g.appendChild(el('div', 'sub2', t.description || ''));
       row.appendChild(g);
@@ -238,15 +306,96 @@ function paintTools() {
         alert(res.doc);
       };
       row.appendChild(doc);
+      const enabled = t.enabled !== false;
+      const tog = el('button', enabled ? 'danger' : 'ghost', enabled ? '停用' : '允许');
+      tog.onclick = async function () {
+        try {
+          await api('/api/tools/toggle', { method: 'POST', body: { name: t.name, enabled: !enabled } });
+          await reload();
+          paintPrompt().catch(() => {});
+          toast(t.name + (enabled ? ' 已停用' : ' 已允许') + '，提示词已更新', 'ok');
+        } catch (err) { toast(err.message, 'err'); }
+      };
+      row.appendChild(tog);
       box.appendChild(row);
     });
   });
 }
 
+/* 批量启用/停用：通过 PUT /api/config 全量替换 tool_toggles */
+async function bulkToggleTools(enabled) {
+  if (!_toolNames.length) return;
+  const toggles = {};
+  _toolNames.forEach(n => { toggles[n] = enabled; });
+  await api('/api/config', { method: 'PUT', body: { tool_toggles: toggles } });
+  await reload();
+  paintPrompt().catch(() => {});
+  toast(enabled ? '全部工具已启用' : '全部工具已停用', 'ok');
+}
+
+document.getElementById('toggleAllOn').onclick = function () {
+  bulkToggleTools(true).catch(err => toast(err.message, 'err'));
+};
+document.getElementById('toggleAllOff').onclick = function () {
+  bulkToggleTools(false).catch(err => toast(err.message, 'err'));
+};
+
 document.getElementById('reloadTools').onclick = async function () {
   await api('/api/tools/refresh', { body: {} });
   paintTools();
   toast('已重新扫描 tools 目录', 'ok');
+};
+
+/* ---------- 自定义配置 ---------- */
+let _customCfg = {};
+
+function paintCustomCfg() {
+  _customCfg = cfg.custom || {};
+  const box = document.getElementById('customCfgList');
+  box.innerHTML = '';
+  const entries = Object.entries(_customCfg);
+  if (!entries.length) {
+    box.innerHTML = '<div class="empty">还没有自定义配置</div>';
+    return;
+  }
+  entries.forEach(function ([key, val]) {
+    const row = el('div', 'list-row');
+    const g = el('div', 'grow');
+    g.appendChild(el('div', 'nm', key));
+    g.appendChild(el('div', 'sub2', JSON.stringify(val)));
+    row.appendChild(g);
+    const del = el('button', 'danger', '删除');
+    del.onclick = async function () {
+      delete _customCfg[key];
+      await api('/api/tools/custom-config', { method: 'POST', body: { custom: _customCfg } });
+      await reload();
+      toast('已删除 ' + key, 'ok');
+    };
+    row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+document.getElementById('ccAdd').onclick = function () {
+  const key = document.getElementById('ccKey').value.trim();
+  const valRaw = document.getElementById('ccVal').value.trim();
+  if (!key) return toast('键不能为空', 'err');
+  // 尝试解析为 JSON（数字/对象/数组），失败则按字符串处理
+  let val;
+  try { val = JSON.parse(valRaw); } catch (_) { val = valRaw; }
+  _customCfg[key] = val;
+  document.getElementById('ccKey').value = '';
+  document.getElementById('ccVal').value = '';
+  paintCustomCfg();
+};
+
+document.getElementById('saveCustomCfg').onclick = async function () {
+  try {
+    await api('/api/tools/custom-config', { method: 'POST', body: { custom: _customCfg } });
+    await reload();
+    markSaved('自定义配置已保存');
+    toast('已保存并立即生效', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
 };
 
 /* ---------- MCP ---------- */
@@ -314,6 +463,140 @@ document.getElementById('refreshMcp').onclick = async function () {
   } catch (err) { toast(err.message, 'err'); }
 };
 
+/* ---------- 用户自定义 Prompt ---------- */
+let _customPrompts = [];
+
+function paintCustomPrompts() {
+  _customPrompts = Array.isArray(cfg.custom_prompts) ? cfg.custom_prompts : [];
+  renderCustomPrompts();
+}
+
+async function refreshCustomPrompts() {
+  const res = await api('/api/prompts');
+  _customPrompts = Array.isArray(res.prompts) ? res.prompts : [];
+  cfg.custom_prompts = _customPrompts;
+  renderCustomPrompts();
+}
+
+function renderCustomPrompts() {
+  const box = document.getElementById('customPromptList');
+  box.innerHTML = '';
+  document.getElementById('customPromptCount').textContent = _customPrompts.length;
+  if (!_customPrompts.length) {
+    box.innerHTML = '<div class="empty">还没有自定义 Prompt，点击「添加 Prompt」创建</div>';
+    return;
+  }
+
+  _customPrompts.forEach(function (p) {
+    const enabled = p.enabled !== false;
+    const row = el('div', 'list-row' + (enabled ? '' : ' prompt-disabled'));
+    const g = el('div', 'grow');
+    const title = el('div', 'prompt-title-line');
+    title.appendChild(el('span', 'nm', p.name || '未命名 Prompt'));
+    title.appendChild(el('span', 'badge' + (enabled ? ' green' : ''), enabled ? '已启用' : '已停用'));
+    g.appendChild(title);
+    g.appendChild(el('div', 'sub2 prompt-content-preview', p.content || ''));
+    row.appendChild(g);
+
+    const actions = el('div', 'prompt-actions');
+    const edit = el('button', 'ghost', '编辑');
+    edit.onclick = function () { openCustomPromptEditor(p); };
+    actions.appendChild(edit);
+
+    const toggle = el('button', 'ghost', enabled ? '停用' : '启用');
+    toggle.onclick = async function () {
+      this.disabled = true;
+      try {
+        await api('/api/prompts/' + encodeURIComponent(p.id), {
+          method: 'PUT', body: { enabled: !enabled }
+        });
+        await refreshCustomPrompts();
+        await paintPrompt();
+        markSaved(p.name + (enabled ? ' 已停用' : ' 已启用'));
+        toast(enabled ? 'Prompt 已停用' : 'Prompt 已启用', 'ok');
+      } catch (err) { toast(err.message, 'err'); }
+      finally { this.disabled = false; }
+    };
+    actions.appendChild(toggle);
+
+    const del = el('button', 'danger', '删除');
+    del.onclick = async function () {
+      if (!confirm('确认删除 Prompt「' + (p.name || '未命名') + '」？此操作不可撤销。')) return;
+      this.disabled = true;
+      try {
+        await api('/api/prompts/' + encodeURIComponent(p.id), { method: 'DELETE' });
+        if (document.getElementById('cpId').value === p.id) closeCustomPromptEditor();
+        await refreshCustomPrompts();
+        await paintPrompt();
+        markSaved('Prompt 已删除');
+        toast('Prompt 已删除', 'ok');
+      } catch (err) { toast(err.message, 'err'); }
+      finally { this.disabled = false; }
+    };
+    actions.appendChild(del);
+    row.appendChild(actions);
+    box.appendChild(row);
+  });
+}
+
+function updateCustomPromptCount() {
+  document.getElementById('cpContentCount').textContent =
+    document.getElementById('cpContent').value.length + ' / 20000';
+}
+
+function openCustomPromptEditor(item) {
+  const editing = Boolean(item && item.id);
+  document.getElementById('customPromptFormTitle').textContent = editing ? '编辑 Prompt' : '添加 Prompt';
+  document.getElementById('cpId').value = editing ? item.id : '';
+  document.getElementById('cpName').value = editing ? (item.name || '') : '';
+  document.getElementById('cpContent').value = editing ? (item.content || '') : '';
+  document.getElementById('cpEnabled').checked = editing ? item.enabled !== false : true;
+  document.getElementById('customPromptEditor').style.display = 'block';
+  updateCustomPromptCount();
+  document.getElementById('cpName').focus();
+}
+
+function closeCustomPromptEditor() {
+  document.getElementById('customPromptEditor').style.display = 'none';
+  document.getElementById('cpId').value = '';
+}
+
+document.getElementById('showCustomPromptEditor').onclick = function () {
+  openCustomPromptEditor(null);
+};
+document.getElementById('cancelCustomPrompt').onclick = closeCustomPromptEditor;
+document.getElementById('cpContent').oninput = updateCustomPromptCount;
+
+document.getElementById('saveCustomPrompt').onclick = async function () {
+  const id = document.getElementById('cpId').value;
+  const name = document.getElementById('cpName').value.trim();
+  const content = document.getElementById('cpContent').value.trim();
+  if (!name) {
+    toast('请输入 Prompt 名称', 'err');
+    document.getElementById('cpName').focus();
+    return;
+  }
+  if (!content) {
+    toast('请输入 Prompt 内容', 'err');
+    document.getElementById('cpContent').focus();
+    return;
+  }
+
+  this.disabled = true;
+  try {
+    await api(id ? '/api/prompts/' + encodeURIComponent(id) : '/api/prompts', {
+      method: id ? 'PUT' : 'POST',
+      body: { name: name, content: content, enabled: document.getElementById('cpEnabled').checked }
+    });
+    closeCustomPromptEditor();
+    await refreshCustomPrompts();
+    await paintPrompt();
+    markSaved(id ? 'Prompt 已更新' : 'Prompt 已添加');
+    toast(id ? 'Prompt 已更新并生效' : 'Prompt 已添加并生效', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
+  finally { this.disabled = false; }
+};
+
 /* ---------- 技能与提示词 ---------- */
 function paintSkills() {
   const box = document.getElementById('skillList');
@@ -338,8 +621,9 @@ function paintSkills() {
 async function paintPrompt() {
   const res = await api('/api/prompt');
   document.getElementById('promptBox').value = res.prompt;
+  const customCount = _customPrompts.filter(p => p.enabled !== false).length;
   document.getElementById('promptInfo').textContent =
-    '共 ' + res.chars + ' 字符 · 内置工具 ' + res.tools + ' 个（含所有 tools.md 与 skills）';
+    '共 ' + res.chars + ' 字符 · 内置工具 ' + res.tools + ' 个 · 已启用自定义 Prompt ' + customCount + ' 个';
 }
 
 document.getElementById('refreshPrompt').onclick = async function () {
@@ -369,7 +653,10 @@ async function paintSys() {
 
 document.querySelector('#tabs').addEventListener('click', function () {
   if (document.querySelector('#tabs .on').dataset.tab === 'prompt') {
-    paintSkills(); paintPrompt().catch(err => toast(err.message, 'err'));
+    paintSkills();
+    refreshCustomPrompts()
+      .then(() => paintPrompt())
+      .catch(err => toast(err.message, 'err'));
   }
 });
 

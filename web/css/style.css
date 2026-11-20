@@ -181,6 +181,10 @@ label > .label {
 .badge.blue { background: rgba(106, 155, 204, .16); color: #3d6d9f; border-color: rgba(106, 155, 204, .34); }
 .badge.green { background: rgba(120, 140, 93, .16); color: #4f6236; border-color: rgba(120, 140, 93, .34); }
 .badge.grey { background: var(--surface-3); color: var(--text-soft); }
+/* 模型类型徽章（点击可手动改） */
+.badge.type-badge { text-transform: none; margin-left: 8px; cursor: pointer; opacity: .85; }
+.badge.type-badge:hover { opacity: 1; }
+.badge.type-badge.manual { border-style: dashed; }
 
 .divider { height: 1px; background: var(--line); border: 0; margin: 18px 0; }
 
@@ -430,6 +434,39 @@ label > .label {
 .call-body.args { color: var(--text-dim); }
 .call-foot { display: flex; gap: 8px; align-items: center; padding: 8px 13px; border-top: 1px solid var(--line-soft); }
 
+/* 交互式提问卡片 */
+.call.question { border-color: rgba(106, 155, 204, .45); background: rgba(106, 155, 204, .06); }
+.call.question .call-head .nm { color: var(--blue); }
+.call.question.answered { border-color: rgba(120, 140, 93, .45); background: rgba(120, 140, 93, .06); }
+.question-body { padding: 10px 13px 12px; display: flex; flex-direction: column; gap: 10px; }
+.question-text { font-size: 14px; line-height: 1.6; }
+.question-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.q-opt {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.q-opt:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.q-opt.picked { border-color: var(--blue); background: rgba(106, 155, 204, .14); color: #3d6d9f; }
+.q-opt:disabled { opacity: .55; cursor: not-allowed; }
+.q-submit {
+  align-self: flex-start;
+  border: none;
+  background: var(--blue);
+  color: #fff;
+  border-radius: var(--radius);
+  padding: 7px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.q-submit:hover { filter: brightness(1.06); }
+.q-submit:disabled { opacity: .55; cursor: not-allowed; }
+
 /* 输入区 */
 .composer { border-top: 1px solid var(--line); background: var(--surface); padding: 16px 32px 18px; }
 .composer-inner { max-width: 880px; margin: 0 auto; }
@@ -444,6 +481,33 @@ label > .label {
 .composer-scope .meta { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
 .composer-scope input { flex: 0 0 320px; font-size: 13px; }
 .composer-scope #wsReal { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+
+/* 技能 $ 选择器浮层 */
+.skill-picker {
+  position: absolute; z-index: 40;
+  left: 10px;
+  width: 340px; max-height: 260px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-family: var(--font-head);
+}
+.skill-picker-item {
+  padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--surface-3);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.skill-picker-item:last-child { border-bottom: none; }
+.skill-picker-item:hover, .skill-picker-item.active { background: var(--surface-2); }
+.skill-picker-item .sk-name { color: var(--orange); font-weight: 600; font-size: 13px; }
+.skill-picker-item .sk-desc { color: var(--text-soft); font-size: 12px; line-height: 1.35; }
+.skill-picker-empty { padding: 12px; color: var(--text-soft); font-size: 12.5px; }
+
+/* 轮次头里的技能标记 */
+.skill-note {
+  font-size: 11.5px; color: var(--blue);
+  background: rgba(106, 155, 204, .12);
+  border: 1px solid rgba(106, 155, 204, .3);
+  border-radius: 999px; padding: 2px 10px; white-space: nowrap;
+}
 
 .suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .suggestion {
@@ -657,6 +721,25 @@ label > .label {
 .side-nav button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: inset 3px 0 0 var(--orange); }
 .side-nav .nav-title { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-soft); padding: 4px 13px 8px; }
 .settings-content { flex: 1; min-width: 0; }
+
+/* 用户自定义 Prompt */
+.prompt-list { margin-top: 16px; }
+.prompt-editor { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.prompt-editor h4 { margin: 0 0 16px; font-size: 15px; }
+.prompt-form-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 4px; }
+.check-row { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-dim); font-size: 13px; cursor: pointer; }
+.check-row input { width: auto; margin: 0; accent-color: var(--orange); }
+.prompt-title-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; }
+.prompt-content-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prompt-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; flex-wrap: wrap; }
+.prompt-disabled .grow { opacity: .62; }
 
 @media (max-width: 1100px) {
   .panel { width: 320px; }

@@ -1,4 +1,4 @@
-"""System 提示词组装：内置规则 + 工具 tools.md + 技能文档 + MCP 说明。"""
+"""System 提示词组装：内置规则 + 工具 tools.md + 技能文档 + MCP 说明 + 用户自定义 Prompt。"""
 
 from __future__ import annotations
 
@@ -60,8 +60,28 @@ def _mcp_section() -> str:
         return ""
 
 
-def build_system_prompt(extra: str = "") -> str:
-    """组装完整 system 提示词。"""
+def build_custom_prompt_section() -> str:
+    """返回所有已启用的用户 Prompt；对手工修改产生的异常配置保持容错。"""
+
+    configured = config.get("custom_prompts", []) or []
+    if not isinstance(configured, list):
+        return ""
+    sections = []
+    for item in configured:
+        if not isinstance(item, dict) or item.get("enabled", True) is False:
+            continue
+        raw_content = item.get("content", "")
+        if not isinstance(raw_content, str) or not raw_content.strip():
+            continue
+        name = str(item.get("name") or "未命名 Prompt").strip() or "未命名 Prompt"
+        sections.append("## {0}\n\n{1}".format(name, raw_content.strip()))
+    if not sections:
+        return ""
+    return "# 用户自定义 Prompt\n\n" + "\n\n".join(sections)
+
+
+def build_system_prompt(extra: str = "", skill_names=None) -> str:
+    """组装完整 system 提示词。`skill_names` 为 None 时加载全部技能；为列表时只加载列出的技能。"""
 
     from common import workspace_dir
 
@@ -77,12 +97,15 @@ def build_system_prompt(extra: str = "") -> str:
     if mcp:
         parts.append(mcp)
 
-    skills = skill_loader.build_prompt_section()
+    skills = skill_loader.build_prompt_section(skill_names)
     if skills:
         parts.append(skills)
 
     parts.append(_limits_section())
     parts.append("# 输出风格\n- 默认使用中文，结构清晰，善用 Markdown 小标题、列表与代码块。\n- 引用代码时标明文件路径与关键行。\n- 不要输出与任务无关的客套话。")
+    custom_prompts = build_custom_prompt_section()
+    if custom_prompts:
+        parts.append(custom_prompts)
     if extra.strip():
         parts.append(extra.strip())
     return "\n\n".join(p for p in parts if p)
