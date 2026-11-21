@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """运行时公共设施：工作区沙箱路径解析、文件变更记录。"""
 
 from __future__ import annotations
@@ -7,7 +8,7 @@ import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -78,7 +79,7 @@ class FileChange:
     diff: str = ""
     before: str = ""
     after: str = ""
-    time: str = field(default_factory=lambda: datetime.now().strftime("%H:%M:%S"))
+    time: str = field(default_factory=lambda: datetime.now(tz=timezone.utc).strftime("%H:%M:%S"))
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

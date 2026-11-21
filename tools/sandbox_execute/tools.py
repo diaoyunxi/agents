@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -42,7 +44,16 @@ def run(command: str, allow_network: bool = False, timeout: int = 30) -> dict:
         })
 
     try:
-        proc = subprocess.run(command, shell=True, cwd=str(sandbox),
+        # 沙箱内也默认不走 shell，减少注入面 (CWE-78)
+        _needs = re.search(r"[|;&<>]|\$\(|`", command) is not None
+        if _needs:
+            args = command
+        else:
+            try:
+                args = shlex.split(command)
+            except ValueError as exc:
+                return {"ok": False, "output": f"命令解析失败: {exc}"}
+        proc = subprocess.run(args, shell=_needs, check=False, cwd=str(sandbox),
                               capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
