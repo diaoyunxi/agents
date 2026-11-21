@@ -78,7 +78,7 @@ def run(goal: str, steps: list) -> dict:
     _plan_path(pid).write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     out = f"已创建计划 {pid}（落盘 {relative(_plan_path(pid))}）：\n{_render(plan)}\n\n" \
           f"推进进度请用 update_plan(plan_id=\"{pid}\")。"
-    return {"output": out}
+    return {"plan_id": pid, "output": out}
 
 
 __all__ = ["run", "NAME", "DESCRIPTION", "PARAMETERS"]

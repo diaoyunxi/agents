@@ -66,6 +66,9 @@ def run(only: list[str] | None = None, dry_run: bool = False, timeout: int = 600
 
     if not missing_pkgs:
         return {"output": header + "\n无需安装 Python 包。"}
+    if len(missing_pkgs) > 20:
+        header += f"\n  （超过 20 个待安装包：仅安装前 20 个；其余请单独 pip_install）\n"
+        missing_pkgs = missing_pkgs[:20]
 
     if dry_run:
         return {"output": header + f"\n\n[dry-run] 将执行: pip install {' '.join(missing_pkgs)}（未实际安装）"}

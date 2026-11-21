@@ -18,3 +18,10 @@ _repro_tool_err.py
 _verify_real_backoff.py
 test_429_backoff.py
 test_tool_history_persistence.py
+# 本地运行时数据与知识库，默认不提交
+.audit/
+.context/
+.kb/
+.memory/
+.think/
+config.json.bak.*

@@ -26,8 +26,8 @@ def _ddg_news(query: str, max_results: int, timeout: int) -> tuple[list[dict], s
     """DuckDuckGo 无密钥 JSON 新闻接口。"""
     try:
         resp = httpx.get(
-            "https://api.duckduckgo.com/?format=json&kl=us-en&no_html=1",
-            params={"q": query, "it": "news"},
+            "https://api.duckduckgo.com/",
+            params={"q": query, "kl": "us-en", "no_html": 1, "format": "json"},
             headers={"User-Agent": USER_AGENT},
             timeout=timeout, follow_redirects=True,
         )

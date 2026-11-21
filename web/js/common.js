@@ -1,21 +1,4 @@
-/* 公共工具：请求封装、提示、Markdown 渲染、格式化 */
-
-async function api(path, options = {}) {
-  const opts = { method: options.body ? 'POST' : 'GET', headers: {}, ...options };
-  if (opts.body && typeof opts.body !== 'string') {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(opts.body);
-  }
-  const resp = await fetch(path, opts);
-  let data = null;
-  try { data = await resp.json(); } catch (e) { data = null; }
-  if (!resp.ok) {
-    const detail = (data && data.detail) || ('请求失败 ' + resp.status);
-    if (resp.status === 401) location.href = '/';
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-  }
-  return data;
-}
+/* 公共工具：提示、Markdown 渲染、格式化 */
 
 function toast(msg, type) {
   const node = document.createElement('div');
@@ -160,15 +143,9 @@ function showUpdateBanner(info) {
 
 async function checkUpdate(force) {
   let info = null;
-  const ctrl = new AbortController();
-  const timer = setTimeout(function () { ctrl.abort(); }, 25000);
   try {
-    const resp = await fetch('/api/update/status' + (force ? '?force=true' : ''),
-      { cache: 'no-store', headers: { 'Accept': 'application/json' }, signal: ctrl.signal });
-    if (!resp.ok) return null;            // 未登录或非仓库：静默忽略
-    info = await resp.json();
+    info = await ws.call('update.status', { force: !!force });
   } catch (e) { return null; }
-  finally { clearTimeout(timer); }
   _updateInfo = info;
   if (info && info.is_repo && info.has_update) {
     showUpdateBanner(info);
@@ -183,12 +160,7 @@ function applyUpdate() {
   const btn = document.getElementById('ubApply');
   if (btn) { btn.disabled = true; btn.textContent = '更新中…'; }
   _ubSetText('正在拉取新代码并重启服务，页面会自动恢复…');
-  fetch('/api/update/apply', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-    cache: 'no-store'
-  }).catch(function () { /* 进程退出导致请求中断，属正常现象 */ });
+  ws.call('update.apply').catch(function () { /* 进程退出导致请求中断，属正常现象 */ });
   waitForRestart();
 }
 
@@ -215,11 +187,8 @@ function waitForRestart() {
 async function showUpdateResult() {
   let message = '更新完成，服务已重启';
   try {
-    const resp = await fetch('/api/update/result', { cache: 'no-store' });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data && data.message) message = data.message;
-    }
+    const data = await ws.call('update.result');
+    if (data && data.message) message = data.message;
   } catch (e) { /* 忽略 */ }
   _ubSetText(escapeHtml(message) + '，2 秒后刷新页面…');
   setTimeout(function () {

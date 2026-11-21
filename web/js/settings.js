@@ -1,4 +1,5 @@
-/* 设置页：提供商 / 模型 / 工具限制 / MCP / 技能与提示词 / 账号 */
+/* 设置页：通过 WebSocket 管理提供商 / 模型 / 工具限制 / MCP / 技能与提示词 / 账号。
+   所有请求通过 window.ws 发送，不再使用 fetch。 */
 
 let cfg = null;
 
@@ -12,7 +13,8 @@ document.getElementById('tabs').onclick = function (e) {
 };
 
 document.getElementById('logout').onclick = async function () {
-  await api('/api/auth/logout', { body: {} });
+  try { await ws.call('auth.logout'); } catch (e) { /* 忽略 */ }
+  document.cookie = 'agents_token=; Max-Age=0; path=/';
   location.href = '/';
 };
 
@@ -22,7 +24,7 @@ function markSaved(text) {
 }
 
 async function reload() {
-  cfg = await api('/api/config');
+  cfg = await ws.call('config.get');
   paintAll();
 }
 
@@ -65,8 +67,10 @@ function paintProviders() {
     const del = el('button', 'danger', '删除');
     del.onclick = async function () {
       if (!confirm('确认删除提供商 ' + p.name + ' ?')) return;
-      await api('/api/providers/' + p.id, { method: 'DELETE' });
-      await reload();
+      try {
+        await ws.call('providers.delete', { pid: p.id });
+        await reload();
+      } catch (err) { toast(err.message, 'err'); }
     };
     row.appendChild(edit); row.appendChild(del);
     box.appendChild(row);
@@ -88,7 +92,6 @@ function modelsOf(pid) {
   return (p && p.models) || [];
 }
 
-/* 始终按「当前在 mProv 中选中的提供商」渲染模型列表，而不是写死 active_provider */
 function syncModelList() {
   paintModelList(modelsOf(document.getElementById('mProv').value));
 }
@@ -107,7 +110,7 @@ document.getElementById('saveProvider').onclick = async function () {
     };
     const id = document.getElementById('fId').value.trim();
     if (id) payload.id = id;
-    await api('/api/providers', { body: payload });
+    await ws.call('providers.add', payload);
     document.getElementById('resetForm').click();
     await reload();
     markSaved('提供商已保存');
@@ -122,16 +125,16 @@ document.getElementById('testBtn').onclick = async function () {
   if (!pid) return toast('请先保存一个提供商', 'err');
   this.disabled = true;
   try {
-    const payload = { base_url: document.getElementById('fBase').value.trim() || (active || {}).base_url };
+    const payload = { pid: pid, base_url: document.getElementById('fBase').value.trim() || (active || {}).base_url };
     const key = document.getElementById('fKey').value.trim();
     if (key) payload.api_key = key;
-    const res = await api('/api/providers/' + pid + '/test', { body: payload });
+    const res = await ws.call('providers.test', payload);
     toast('连通正常，' + res.count + ' 个模型，耗时 ' + res.elapsed_ms + 'ms', 'ok');
   } catch (err) { toast(err.message, 'err'); }
   finally { this.disabled = false; }
 };
 
-/* ---------- 模型 ---------- */
+/* ---------- 模型列表 ---------- */
 let allModels = [];
 const MODEL_TYPE_LABELS = {
   text_to_image: '文生图', image_to_text: '图生文', image_classification: '图像分类',
@@ -181,7 +184,6 @@ async function changeModelType(modelId, currentType) {
   const pid = document.getElementById('mProv').value;
   const p = (cfg.providers || []).find(x => x.id === pid);
   const overrides = (p && p.model_type_overrides) || {};
-  const options = Object.keys(MODEL_TYPE_LABELS).map(k => k).join('\n');
   const sel = prompt('选择「' + modelId + '」的模型类型（留空=自动识别）：\n' +
     Object.keys(MODEL_TYPE_LABELS).map((k, i) => (i + 1) + '. ' + MODEL_TYPE_LABELS[k] + ' (' + k + ')').join('\n') +
     '\n\n输入序号 1-' + Object.keys(MODEL_TYPE_LABELS).length + '，或留空清除手动设置');
@@ -192,7 +194,7 @@ async function changeModelType(modelId, currentType) {
     next = Object.keys(MODEL_TYPE_LABELS)[idx - 1];
   }
   try {
-    await api('/api/providers/' + pid + '/models/type', { body: { model: modelId, type: next } });
+    await ws.call('providers.model_type', { pid: pid, model: modelId, type: next });
     await reload();
     document.getElementById('mProv').value = pid;
     syncModelList();
@@ -206,8 +208,6 @@ function paintModel() {
 }
 
 document.getElementById('mSearch').oninput = function () { paintModelList(allModels); };
-
-/* 在「模型与默认」页手动切换提供商下拉框时，立即刷新对应模型列表 */
 document.getElementById('mProv').onchange = function () { syncModelList(); };
 
 document.getElementById('fetchModels').onclick = async function () {
@@ -215,7 +215,7 @@ document.getElementById('fetchModels').onclick = async function () {
   if (!pid) return toast('请先添加一个提供商', 'err');
   this.disabled = true;
   try {
-    const res = await api('/api/providers/' + pid + '/models', { body: {} });
+    const res = await ws.call('providers.models', { pid: pid });
     await reload();
     document.getElementById('mProv').value = pid;
     syncModelList();
@@ -228,7 +228,7 @@ document.getElementById('saveModel').onclick = async function () {
   const picked = document.querySelector('input[name="m"]:checked');
   if (!picked) return toast('请先选择模型', 'err');
   try {
-    await api('/api/providers/' + document.getElementById('mProv').value + '/select', { body: { model: picked.value } });
+    await ws.call('providers.select', { pid: document.getElementById('mProv').value, model: picked.value });
     await reload();
     markSaved('默认模型已更新');
     toast('已设为默认模型', 'ok');
@@ -242,14 +242,16 @@ function paintParams() {
 }
 
 document.getElementById('saveParams').onclick = async function () {
-  await api('/api/config', { method: 'PUT', body: { ai: {
-    max_tokens: Number(document.getElementById('pMaxTokens').value) || 8192,
-    temperature: Number(document.getElementById('pTemp').value),
-    timeout: Number(document.getElementById('pTimeout').value) || 180
-  } } });
-  await reload();
-  markSaved('生成参数已保存');
-  toast('已保存', 'ok');
+  try {
+    await ws.call('config.put', { ai: {
+      max_tokens: Number(document.getElementById('pMaxTokens').value) || 8192,
+      temperature: Number(document.getElementById('pTemp').value),
+      timeout: Number(document.getElementById('pTimeout').value) || 180
+    } });
+    await reload();
+    markSaved('生成参数已保存');
+    toast('已保存', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
 };
 
 /* ---------- 工具与限制 ---------- */
@@ -267,18 +269,20 @@ function paintLimits() {
 }
 
 document.getElementById('saveLimits').onclick = async function () {
-  await api('/api/config', { method: 'PUT', body: { tool_limits: {
-    enabled: document.getElementById('tEnabled').value === '1',
-    max_calls_per_round: Number(document.getElementById('tRound').value) || 10,
-    max_total_calls: Number(document.getElementById('tTotal').value) || 60,
-    max_rounds: Number(document.getElementById('tRounds').value) || 25,
-    allowed_tools: splitList(document.getElementById('tAllowed').value),
-    denied_tools: splitList(document.getElementById('tDenied').value),
-    require_confirmation: splitList(document.getElementById('tConfirm').value)
-  } } });
-  await reload();
-  markSaved('工具限制已保存（后端已热加载）');
-  toast('已保存并立即生效', 'ok');
+  try {
+    await ws.call('config.put', { tool_limits: {
+      enabled: document.getElementById('tEnabled').value === '1',
+      max_calls_per_round: Number(document.getElementById('tRound').value) || 10,
+      max_total_calls: Number(document.getElementById('tTotal').value) || 60,
+      max_rounds: Number(document.getElementById('tRounds').value) || 25,
+      allowed_tools: splitList(document.getElementById('tAllowed').value),
+      denied_tools: splitList(document.getElementById('tDenied').value),
+      require_confirmation: splitList(document.getElementById('tConfirm').value)
+    } });
+    await reload();
+    markSaved('工具限制已保存（后端已热加载）');
+    toast('已保存并立即生效', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
 };
 
 /* ---------- 工具开关 ---------- */
@@ -287,7 +291,7 @@ let _toolNames = [];
 function paintTools() {
   const box = document.getElementById('toolList');
   box.innerHTML = '';
-  fetch('/api/tools').then(r => r.json()).then(function (res) {
+  ws.call('tools.list').then(function (res) {
     const tools = res.tools || [];
     _toolNames = tools.map(t => t.name);
     document.getElementById('toolCount').textContent = tools.length;
@@ -302,15 +306,17 @@ function paintTools() {
       row.appendChild(g);
       const doc = el('button', 'ghost', '查看文档');
       doc.onclick = async function () {
-        const res = await api('/api/tools/' + encodeURIComponent(t.name) + '/doc');
-        alert(res.doc);
+        try {
+          const res = await ws.call('tools.doc', { name: t.name });
+          alert(res.doc);
+        } catch (err) { toast(err.message, 'err'); }
       };
       row.appendChild(doc);
       const enabled = t.enabled !== false;
       const tog = el('button', enabled ? 'danger' : 'ghost', enabled ? '停用' : '允许');
       tog.onclick = async function () {
         try {
-          await api('/api/tools/toggle', { method: 'POST', body: { name: t.name, enabled: !enabled } });
+          await ws.call('tools.toggle', { name: t.name, enabled: !enabled });
           await reload();
           paintPrompt().catch(() => {});
           toast(t.name + (enabled ? ' 已停用' : ' 已允许') + '，提示词已更新', 'ok');
@@ -319,15 +325,14 @@ function paintTools() {
       row.appendChild(tog);
       box.appendChild(row);
     });
-  });
+  }).catch(err => toast(err.message, 'err'));
 }
 
-/* 批量启用/停用：通过 PUT /api/config 全量替换 tool_toggles */
 async function bulkToggleTools(enabled) {
   if (!_toolNames.length) return;
   const toggles = {};
   _toolNames.forEach(n => { toggles[n] = enabled; });
-  await api('/api/config', { method: 'PUT', body: { tool_toggles: toggles } });
+  await ws.call('config.put', { tool_toggles: toggles });
   await reload();
   paintPrompt().catch(() => {});
   toast(enabled ? '全部工具已启用' : '全部工具已停用', 'ok');
@@ -341,9 +346,11 @@ document.getElementById('toggleAllOff').onclick = function () {
 };
 
 document.getElementById('reloadTools').onclick = async function () {
-  await api('/api/tools/refresh', { body: {} });
-  paintTools();
-  toast('已重新扫描 tools 目录', 'ok');
+  try {
+    await ws.call('tools.refresh');
+    paintTools();
+    toast('已重新扫描 tools 目录', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
 };
 
 /* ---------- 自定义配置 ---------- */
@@ -367,9 +374,11 @@ function paintCustomCfg() {
     const del = el('button', 'danger', '删除');
     del.onclick = async function () {
       delete _customCfg[key];
-      await api('/api/tools/custom-config', { method: 'POST', body: { custom: _customCfg } });
-      await reload();
-      toast('已删除 ' + key, 'ok');
+      try {
+        await ws.call('tools.custom_config', { custom: _customCfg });
+        await reload();
+        toast('已删除 ' + key, 'ok');
+      } catch (err) { toast(err.message, 'err'); }
     };
     row.appendChild(del);
     box.appendChild(row);
@@ -380,7 +389,6 @@ document.getElementById('ccAdd').onclick = function () {
   const key = document.getElementById('ccKey').value.trim();
   const valRaw = document.getElementById('ccVal').value.trim();
   if (!key) return toast('键不能为空', 'err');
-  // 尝试解析为 JSON（数字/对象/数组），失败则按字符串处理
   let val;
   try { val = JSON.parse(valRaw); } catch (_) { val = valRaw; }
   _customCfg[key] = val;
@@ -391,7 +399,7 @@ document.getElementById('ccAdd').onclick = function () {
 
 document.getElementById('saveCustomCfg').onclick = async function () {
   try {
-    await api('/api/tools/custom-config', { method: 'POST', body: { custom: _customCfg } });
+    await ws.call('tools.custom_config', { custom: _customCfg });
     await reload();
     markSaved('自定义配置已保存');
     toast('已保存并立即生效', 'ok');
@@ -413,14 +421,18 @@ function paintMcp() {
     const tog = el('button', 'ghost', s.enabled === false ? '启用' : '停用');
     tog.onclick = async function () {
       s.enabled = s.enabled === false;
-      await api('/api/config', { method: 'PUT', body: { mcp_servers: list } });
-      await reload();
+      try {
+        await ws.call('config.put', { mcp_servers: list });
+        await reload();
+      } catch (err) { toast(err.message, 'err'); }
     };
     const del = el('button', 'danger', '删除');
     del.onclick = async function () {
       list.splice(idx, 1);
-      await api('/api/config', { method: 'PUT', body: { mcp_servers: list } });
-      await reload();
+      try {
+        await ws.call('config.put', { mcp_servers: list });
+        await reload();
+      } catch (err) { toast(err.message, 'err'); }
     };
     row.appendChild(tog); row.appendChild(del);
     box.appendChild(row);
@@ -445,7 +457,7 @@ document.getElementById('saveServer').onclick = async function () {
     };
     if (!item.name || !item.command) throw new Error('名称与命令必填');
     list.push(item);
-    await api('/api/config', { method: 'PUT', body: { mcp_servers: list } });
+    await ws.call('config.put', { mcp_servers: list });
     document.getElementById('clearServer').click();
     await reload();
     toast('已保存，刷新连接后生效', 'ok');
@@ -454,7 +466,7 @@ document.getElementById('saveServer').onclick = async function () {
 
 document.getElementById('refreshMcp').onclick = async function () {
   try {
-    const res = await api('/api/mcp/refresh', { body: {} });
+    const res = await ws.call('mcp.refresh');
     (res.status || []).forEach(function (s) {
       toast(s.name + '：' + (s.connected ? ('已连接，' + s.tools + ' 个工具') : ('失败 - ' + (s.error || '未知'))),
         s.connected ? 'ok' : 'err');
@@ -472,7 +484,7 @@ function paintCustomPrompts() {
 }
 
 async function refreshCustomPrompts() {
-  const res = await api('/api/prompts');
+  const res = await ws.call('prompts.list');
   _customPrompts = Array.isArray(res.prompts) ? res.prompts : [];
   cfg.custom_prompts = _customPrompts;
   renderCustomPrompts();
@@ -486,7 +498,6 @@ function renderCustomPrompts() {
     box.innerHTML = '<div class="empty">还没有自定义 Prompt，点击「添加 Prompt」创建</div>';
     return;
   }
-
   _customPrompts.forEach(function (p) {
     const enabled = p.enabled !== false;
     const row = el('div', 'list-row' + (enabled ? '' : ' prompt-disabled'));
@@ -507,9 +518,7 @@ function renderCustomPrompts() {
     toggle.onclick = async function () {
       this.disabled = true;
       try {
-        await api('/api/prompts/' + encodeURIComponent(p.id), {
-          method: 'PUT', body: { enabled: !enabled }
-        });
+        await ws.call('prompts.update', { id: p.id, enabled: !enabled });
         await refreshCustomPrompts();
         await paintPrompt();
         markSaved(p.name + (enabled ? ' 已停用' : ' 已启用'));
@@ -524,7 +533,7 @@ function renderCustomPrompts() {
       if (!confirm('确认删除 Prompt「' + (p.name || '未命名') + '」？此操作不可撤销。')) return;
       this.disabled = true;
       try {
-        await api('/api/prompts/' + encodeURIComponent(p.id), { method: 'DELETE' });
+        await ws.call('prompts.delete', { id: p.id });
         if (document.getElementById('cpId').value === p.id) closeCustomPromptEditor();
         await refreshCustomPrompts();
         await paintPrompt();
@@ -571,23 +580,15 @@ document.getElementById('saveCustomPrompt').onclick = async function () {
   const id = document.getElementById('cpId').value;
   const name = document.getElementById('cpName').value.trim();
   const content = document.getElementById('cpContent').value.trim();
-  if (!name) {
-    toast('请输入 Prompt 名称', 'err');
-    document.getElementById('cpName').focus();
-    return;
-  }
-  if (!content) {
-    toast('请输入 Prompt 内容', 'err');
-    document.getElementById('cpContent').focus();
-    return;
-  }
-
+  if (!name) { toast('请输入 Prompt 名称', 'err'); document.getElementById('cpName').focus(); return; }
+  if (!content) { toast('请输入 Prompt 内容', 'err'); document.getElementById('cpContent').focus(); return; }
   this.disabled = true;
   try {
-    await api(id ? '/api/prompts/' + encodeURIComponent(id) : '/api/prompts', {
-      method: id ? 'PUT' : 'POST',
-      body: { name: name, content: content, enabled: document.getElementById('cpEnabled').checked }
-    });
+    if (id) {
+      await ws.call('prompts.update', { id: id, name: name, content: content, enabled: document.getElementById('cpEnabled').checked });
+    } else {
+      await ws.call('prompts.add', { name: name, content: content, enabled: document.getElementById('cpEnabled').checked });
+    }
     closeCustomPromptEditor();
     await refreshCustomPrompts();
     await paintPrompt();
@@ -601,7 +602,7 @@ document.getElementById('saveCustomPrompt').onclick = async function () {
 function paintSkills() {
   const box = document.getElementById('skillList');
   box.innerHTML = '';
-  fetch('/api/skills').then(r => r.json()).then(function (res) {
+  ws.call('skills.list').then(function (res) {
     const skills = res.skills || [];
     if (!skills.length) { box.innerHTML = '<div class="empty">skills/ 目录下还没有技能，放一个 .md 即可</div>'; return; }
     skills.forEach(function (s) {
@@ -615,11 +616,11 @@ function paintSkills() {
       row.appendChild(view);
       box.appendChild(row);
     });
-  });
+  }).catch(err => toast(err.message, 'err'));
 }
 
 async function paintPrompt() {
-  const res = await api('/api/prompt');
+  const res = await ws.call('prompt.get');
   document.getElementById('promptBox').value = res.prompt;
   const customCount = _customPrompts.filter(p => p.enabled !== false).length;
   document.getElementById('promptInfo').textContent =
@@ -634,10 +635,10 @@ document.getElementById('refreshPrompt').onclick = async function () {
 /* ---------- 账号 ---------- */
 document.getElementById('savePass').onclick = async function () {
   try {
-    await api('/api/auth/password', { body: {
+    await ws.call('auth.password', {
       old_password: document.getElementById('oldPass').value,
       new_password: document.getElementById('newPass').value
-    } });
+    });
     document.getElementById('oldPass').value = '';
     document.getElementById('newPass').value = '';
     toast('密码已更新', 'ok');
@@ -645,10 +646,12 @@ document.getElementById('savePass').onclick = async function () {
 };
 
 async function paintSys() {
-  const res = await api('/api/health');
-  document.getElementById('sysInfo').innerHTML =
-    '工作区：' + escapeHtml(res.workspace) + '<br>已加载工具：' + res.tools +
-    ' 个<br>配置文件：config.json（启动与修改时自动读取）';
+  try {
+    const res = await ws.call('health');
+    document.getElementById('sysInfo').innerHTML =
+      '工作区：' + escapeHtml(res.workspace) + '<br>已加载工具：' + res.tools +
+      ' 个<br>配置文件：config.json（启动与修改时自动读取）';
+  } catch (e) { /* 忽略 */ }
 }
 
 document.querySelector('#tabs').addEventListener('click', function () {
@@ -661,4 +664,3 @@ document.querySelector('#tabs').addEventListener('click', function () {
 });
 
 reload().catch(err => toast(err.message, 'err'));
-

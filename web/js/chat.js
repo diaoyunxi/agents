@@ -1,43 +1,30 @@
-/* 对话页：SSE 流式渲染思考 / 正文 / 工具调用，右侧汇总文件变更 */
+/* 对话页：通过 WebSocket 流式渲染思考 / 正文 / 工具调用，右侧汇总文件变更。
+   所有请求通过 window.ws 发送，不再使用 fetch。 */
 
 const threadEl = document.getElementById('thread');
 const threadInner = threadEl.querySelector('.thread-inner');
 const changesEl = document.getElementById('changes');
-const history = [];
-let controller = null;
-let cur = null;
-let lastChangeKey = '';
-let saveTimer = null; // 定期保存定时器
-
-/* ---------- 会话管理 ---------- */
 let currentConvId = null;
 let convTitle = '';
+let controller = null;  // 运行中任务标记
+let cur = null;
+let lastChangeKey = '';
 const convListEl = document.getElementById('convList');
 
-function scrollDown() {
-  threadEl.scrollTop = threadEl.scrollHeight;
-}
-
-/* 自动跟随滚动：只有当用户已停在底部附近时，流式内容才继续滚到底；
-   用户手动上滑查看历史时不打断（新轮次不再强制拉回底部）。 */
+/* ---------- 滚动 ---------- */
+function scrollDown() { threadEl.scrollTop = threadEl.scrollHeight; }
 let pinnedBottom = true;
 function isNearBottom(threshold) {
   threshold = threshold == null ? 80 : threshold;
   return threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight <= threshold;
 }
-function refreshPinnedBottom() {
-  pinnedBottom = isNearBottom();
-}
+function refreshPinnedBottom() { pinnedBottom = isNearBottom(); }
 threadEl.addEventListener('scroll', refreshPinnedBottom);
-function autoScroll() {
-  if (pinnedBottom) scrollDown();
-}
+function autoScroll() { if (pinnedBottom) scrollDown(); }
 
-/* ---------- 工作区（每轮对话开始时生效） ---------- */
+/* ---------- 工作区 ---------- */
 let defaultWorkspace = '';
-
 function wsValue() { return document.getElementById('wsInput').value.trim(); }
-
 function paintWorkspaceHint() {
   const node = document.getElementById('wsReal');
   const typed = wsValue();
@@ -45,33 +32,15 @@ function paintWorkspaceHint() {
   node.textContent = text;
   node.title = text;
 }
-
 function setWorkspaceReal(path) {
   const node = document.getElementById('wsReal');
   node.textContent = path ? ('本次：' + path) : '';
   node.title = node.textContent;
 }
 
-async function loadDefaultWorkspace() {
-  try {
-    const res = await api('/api/health');
-    defaultWorkspace = res.workspace || '';
-  } catch (err) { /* 忽略 */ }
-  const input = document.getElementById('wsInput');
-  input.placeholder = defaultWorkspace ? ('留空使用默认工作区（' + defaultWorkspace + '）') : '留空使用默认工作区';
-  paintWorkspaceHint();
-}
-
-document.getElementById('wsInput').addEventListener('input', function () { paintWorkspaceHint(); });
-document.getElementById('wsDefault').onclick = function () {
-  document.getElementById('wsInput').value = '';
-  paintWorkspaceHint();
-  document.getElementById('wsInput').focus();
-};
-
 /* ---------- 模型选择 ---------- */
 async function loadModels() {
-  const res = await api('/api/providers');
+  const res = await ws.call('providers.list');
   const pSel = document.getElementById('providerSel');
   const mSel = document.getElementById('modelSel');
   pSel.innerHTML = '';
@@ -87,7 +56,7 @@ async function loadModels() {
 
 async function fillModels(pid) {
   if (!pid) return;
-  const res = await api('/api/models?provider_id=' + encodeURIComponent(pid));
+  const res = await ws.call('models.get', { provider_id: pid });
   const mSel = document.getElementById('modelSel');
   mSel.innerHTML = '';
   const models = res.models && res.models.length ? res.models : [{ id: res.model }];
@@ -111,14 +80,15 @@ document.getElementById('providerSel').onchange = function () { fillModels(this.
 document.getElementById('reloadModels').onclick = async function () {
   const pid = document.getElementById('providerSel').value;
   try {
-    await api('/api/providers/' + pid + '/models', { body: {} });
+    await ws.call('providers.models', { pid: pid });
     await fillModels(pid);
     toast('模型列表已更新', 'ok');
   } catch (err) { toast(err.message, 'err'); }
 };
 
 document.getElementById('logout').onclick = async function () {
-  await api('/api/auth/logout', { body: {} });
+  try { await ws.call('auth.logout'); } catch (e) { /* 忽略 */ }
+  document.cookie = 'agents_token=; Max-Age=0; path=/';
   location.href = '/';
 };
 
@@ -143,7 +113,6 @@ document.getElementById('suggestions').onclick = function (e) {
 /* ---------- 消息渲染 ---------- */
 function newAssistant() {
   const turn = el('div', 'turn agent');
-
   const head = el('div', 'turn-head');
   head.appendChild(el('span', 'role', 'Agent'));
   const modelBadge = el('span', 'badge orange', '连接中');
@@ -159,13 +128,10 @@ function newAssistant() {
   reasoning.appendChild(reasonBody);
   turn.appendChild(reasoning);
 
-  /* 正文与工具调用按时间顺序混排在同一个内容流中（每轮一个 round-block） */
   const content = el('div', 'content');
   turn.appendChild(content);
-
   const tail = el('div', 'md tail');
   turn.appendChild(tail);
-
   threadInner.appendChild(turn);
   scrollDown();
   return { turn, head, modelBadge, reasoning, reasonBody, content, tail, roundBox: null,
@@ -181,21 +147,17 @@ function addToolBlock(call) {
   head.appendChild(el('span', 'grow'));
   const state = el('span', 'badge grey', '执行中');
   head.appendChild(state);
-
   const args = el('pre', 'call-body args', JSON.stringify(call.arguments || {}, null, 2));
   const out = el('pre', 'call-body');
   out.style.display = 'none';
-
   box.appendChild(head);
   box.appendChild(args);
   box.appendChild(out);
-
   head.onclick = function () {
     const open = out.style.display === 'none';
     out.style.display = open ? 'block' : 'none';
     args.style.display = open ? 'none' : 'block';
   };
-
   (cur.roundBox || cur.content).appendChild(box);
   autoScroll();
   const rec = { box, state, out };
@@ -203,14 +165,14 @@ function addToolBlock(call) {
   return rec;
 }
 
-/* ---------- 交互式提问（ask_followup_question） ---------- */
+/* ---------- 交互式提问 ---------- */
 function addQuestionBlock(ev) {
   if (!cur) return;
-  const q = ev.question || {};
+  const q = ev.question || ev.data || {};
   const box = el('div', 'call question');
   const head = el('div', 'call-head');
   head.appendChild(el('span', 'tag', '提问'));
-  head.appendChild(el('span', 'nm', ev.tool || 'ask_followup_question'));
+  head.appendChild(el('span', 'nm', q.id || 'question'));
   head.appendChild(el('span', 'grow'));
   const state = el('span', 'badge blue', '等待回答');
   head.appendChild(state);
@@ -226,8 +188,7 @@ function addQuestionBlock(ev) {
     box.dataset.done = '1';
     state.textContent = '提交中';
     state.className = 'badge grey';
-    api('/api/question/' + encodeURIComponent(q.id || '') + '/answer',
-      { body: { answer: labels.length === 1 ? labels[0] : labels } })
+    ws.call('question.answer', { qid: q.id, answer: q.multi_select ? labels : (labels.length === 1 ? labels[0] : labels) })
       .then(function () {
         state.textContent = '已回答';
         state.className = 'badge green';
@@ -314,11 +275,9 @@ function renderChanges(list) {
     stats.appendChild(document.createTextNode(' '));
     stats.appendChild(el('span', 'minus', '-' + c.deletions));
     head.appendChild(stats);
-
     const pre = document.createElement('pre');
     pre.innerHTML = renderDiff(c.diff);
     pre.style.display = 'none';
-
     head.onclick = function () { pre.style.display = pre.style.display === 'none' ? 'block' : 'none'; };
     box.appendChild(head);
     box.appendChild(pre);
@@ -327,10 +286,7 @@ function renderChanges(list) {
 }
 
 /* ---------- 对话（持久化到后端 chat/） ---------- */
-
-function clearThread() {
-  threadInner.innerHTML = '';
-}
+function clearThread() { threadInner.innerHTML = ''; }
 
 function showIntroPlaceholder() {
   clearThread();
@@ -398,7 +354,7 @@ function addAssistantTurn(message) {
 async function refreshConversationList() {
   let list = [];
   try {
-    const res = await api('/api/conversations');
+    const res = await ws.call('conversations.list');
     list = res.conversations || [];
   } catch (err) { /* 忽略 */ }
   convListEl.innerHTML = '';
@@ -418,8 +374,8 @@ async function refreshConversationList() {
       e.stopPropagation();
       if (!confirm('确定删除该对话？此操作不可恢复。')) return;
       try {
-        await api('/api/conversations/' + c.id, { method: 'DELETE' });
-        if (currentConvId === c.id) { currentConvId = null; history.length = 0; showIntroPlaceholder(); }
+        await ws.call('conversations.delete', { cid: c.id });
+        if (currentConvId === c.id) { currentConvId = null; showIntroPlaceholder(); }
         await refreshConversationList();
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -431,31 +387,16 @@ async function refreshConversationList() {
 
 async function loadConversationById(id) {
   try {
-    const res = await api('/api/conversations/' + id);
+    const res = await ws.call('conversations.get', { cid: id });
     currentConvId = res.conversation.id;
     convTitle = res.conversation.title || '新对话';
     document.getElementById('wsInput').value = res.conversation.workspace || '';
     paintWorkspaceHint();
-    history.length = 0;
-    (res.conversation.messages || []).forEach(function (m) {
-      const item = { role: m.role, content: m.content };
-      if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
-        item.tool_calls = m.tool_calls.map(function (c) {
-          const call = { id: c.id, name: c.name, arguments: c.arguments };
-          return call;
-        });
-      }
-      if (Array.isArray(m.tool_results) && m.tool_results.length) {
-        item.tool_results = m.tool_results.map(function (r) {
-          return { tool_call_id: r.tool_call_id, tool: r.tool, output: r.output, ok: r.ok };
-        });
-      }
-      history.push(item);
-    });
     clearThread();
-    if (!history.length) { showIntroPlaceholder(); }
+    const msgs = res.conversation.messages || [];
+    if (!msgs.length) { showIntroPlaceholder(); }
     else {
-      history.forEach(function (m) {
+      msgs.forEach(function (m) {
         if (m.role === 'user') addUserTurn(m.content);
         else addAssistantTurn(m);
       });
@@ -466,115 +407,16 @@ async function loadConversationById(id) {
 
 async function ensureConversation() {
   if (currentConvId) return currentConvId;
-  const res = await api('/api/conversations', { body: { workspace: wsValue() } });
+  const res = await ws.call('conversations.create', { workspace: wsValue() });
   currentConvId = res.conversation.id;
   convTitle = res.conversation.title || '新对话';
   await refreshConversationList();
   return currentConvId;
 }
 
-function currentTitle() {
-  if (convTitle && convTitle !== '新对话') return convTitle;
-  const first = history.find(function (m) { return m.role === 'user'; });
-  return first ? first.content.slice(0, 24) : '新对话';
-}
-
-async function saveConversation() {
-  if (!currentConvId) return;
-  convTitle = currentTitle();
-  try {
-    await api('/api/conversations/' + currentConvId, {
-      method: 'PUT',
-      body: { messages: history, title: convTitle, workspace: wsValue() },
-    });
-    await refreshConversationList();
-  } catch (err) { /* 静默保存失败 */ }
-}
-
-// 收集当前 assistant 消息的完整结构（含 tool_calls 和 tool_results）
-function saveAssistantMessage() {
-  if (!cur || (!cur.raw && !(cur._toolCalls && cur._toolCalls.length))) return;
-  // 找到 history 中最后一条 assistant 消息并更新它
-  let lastAssistantIdx = -1;
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'assistant') {
-      lastAssistantIdx = i;
-      break;
-    }
-  }
-  const msg = { role: 'assistant', content: cur.raw || '' };
-  // 只保存“有结果”的工具调用；没有结果的 stop/tool_call 不进入历史，避免后端重建 OpenAI tool 消息时残缺。
-  const calls = (cur._toolCalls || []).filter(function (call) {
-    return (cur._pendingToolResults || []).some(function (r) {
-      return r && call && r.tool_call_id && call.id && r.tool_call_id === call.id;
-    });
-  });
-  const results = (cur._pendingToolResults || []).filter(function (r) {
-    return calls.some(function (call) {
-      return r && call && r.tool_call_id && call.id && r.tool_call_id === call.id;
-    });
-  });
-  if (calls.length) {
-    msg.tool_calls = calls.map(function (call) {
-      return { id: call.id, name: call.name, arguments: call.arguments || {} };
-    });
-  }
-  if (results.length) {
-    msg.tool_results = results.map(function (r) {
-      return {
-        tool_call_id: r.tool_call_id,
-        tool: r.tool,
-        output: r.output || '',
-        ok: r.ok
-      };
-    });
-  }
-  if (lastAssistantIdx >= 0 && history[lastAssistantIdx]) {
-    const existing = history[lastAssistantIdx];
-    if (msg.tool_calls && msg.tool_calls.length) {
-      existing.tool_calls = (existing.tool_calls || []).concat(msg.tool_calls);
-    }
-    if (msg.tool_results && msg.tool_results.length) {
-      existing.tool_results = (existing.tool_results || []).concat(msg.tool_results);
-    }
-    if (!existing.content) existing.content = msg.content || '';
-  } else {
-    history.push(msg);
-  }
-  // 清空暂存
-  cur._toolCalls = [];
-  cur._pendingToolResults = [];
-  // 立即保存
-  saveConversation();
-}
-
-// 定期保存（每 30 秒）
-function startPeriodicSave() {
-  stopPeriodicSave();
-  saveTimer = setInterval(function() {
-    if (controller) saveConversation();
-  }, 30000);
-}
-
-function stopPeriodicSave() {
-  if (saveTimer) {
-    clearInterval(saveTimer);
-    saveTimer = null;
-  }
-}
-
-document.addEventListener('beforeunload', function(e) {
-  if (controller || history.length > 0) {
-    e.preventDefault();
-    e.returnValue = '';
-    saveConversation();
-  }
-});
-
 document.getElementById('newChat').onclick = async function () {
   currentConvId = null;
   convTitle = '';
-  history.length = 0;
   document.getElementById('wsInput').value = '';
   paintWorkspaceHint();
   await ensureConversation();
@@ -583,12 +425,12 @@ document.getElementById('newChat').onclick = async function () {
 };
 
 /* ---------- 技能 $ 选择器 ---------- */
-let skillList = [];   // [{name, description, when_to_use}]
-let skillSet = {};     // name -> true
+let skillList = [];
+let skillSet = {};
 
 async function loadSkillList() {
   try {
-    const res = await api('/api/skills?slim=true');
+    const res = await ws.call('skills.list', { slim: true });
     skillList = res.skills || [];
     skillSet = {};
     skillList.forEach(function (s) { skillSet[s.name] = true; });
@@ -596,7 +438,6 @@ async function loadSkillList() {
 }
 
 function extractSkillNames(text) {
-  // 按空白切分 token，挑出「$ 后紧跟的已知技能名」。避免依赖变长 lookbehind。
   const found = [];
   String(text || '').split(/\s+/).forEach(function (tok) {
     if (tok.charAt(0) !== '$') return;
@@ -607,7 +448,6 @@ function extractSkillNames(text) {
 }
 
 function positionPicker() {
-  // picker 位于 .composer-box（position:relative）内部，绝对定位贴在其底边下方
   const picker = document.getElementById('skillPicker');
   picker.style.left = '10px';
   picker.style.top = '100%';
@@ -645,7 +485,6 @@ function closePicker() {
 function insertSkill(name) {
   const input = document.getElementById('input');
   const start = input.selectionStart;
-  // 替换从最近一个行首/空白后的 $ 到光标之间的片段
   const before = input.value.slice(0, start);
   const seg = before.match(/(?:^|(?<=\s))\$[a-z0-9-]*$/i);
   let replaceFrom = start;
@@ -658,7 +497,6 @@ function insertSkill(name) {
   closePicker();
 }
 
-// 监听输入：检测 $ 触发浮层
 (function bindSkillPicker() {
   const input = document.getElementById('input');
   input.addEventListener('input', function () {
@@ -682,36 +520,34 @@ function insertSkill(name) {
         const next = Math.min(idx + 1, items.length - 1);
         picker.dataset.active = next;
         highlight(items, next);
-      }
-      else if (e.key === 'ArrowUp') {
+      } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         const prev = Math.max(idx - 1, 0);
         picker.dataset.active = prev;
         highlight(items, prev);
-      }
-      else if (e.key === 'Enter' && items.length && !e.shiftKey) {
+      } else if (e.key === 'Enter' && items.length && !e.shiftKey) {
         e.preventDefault();
         const active = items[Math.min(idx, items.length - 1)];
         insertSkill(active.dataset.name);
-      }
-      else if (e.key === 'Escape') { closePicker(); }
+      } else if (e.key === 'Escape') { closePicker(); }
     }
   });
   document.addEventListener('click', function (e) {
     if (!document.getElementById('skillPicker').contains(e.target) && e.target.id !== 'input') closePicker();
   });
-
   function highlight(items, active) {
     items.forEach(function (it, i) { it.classList.toggle('active', i === active); });
   }
 })();
 
-/* ---------- SSE 会话 ---------- */
-function handle(ev) {
-  switch (ev.event) {
-    case 'start':
-      cur.modelBadge.textContent = ev.model;
-      document.getElementById('status').textContent = ev.provider + ' · ' + ev.model;
+/* ---------- WS 事件处理 ---------- */
+function handleEvent(ev) {
+  // ev 是后端推来的事件帧：{event: "...", conversation_id, ...}
+  const event = ev.event;
+  switch (event) {
+    case 'chat.start':
+      cur.modelBadge.textContent = ev.model || '';
+      document.getElementById('status').textContent = (ev.provider || '') + ' · ' + (ev.model || '');
       if (ev.workspace) setWorkspaceReal(ev.workspace);
       if (ev.skill_note) {
         const sk = el('div', 'skill-note');
@@ -721,7 +557,19 @@ function handle(ev) {
         cur.head.appendChild(sk);
       }
       break;
-    case 'round': {
+    case 'start':
+      cur.modelBadge.textContent = ev.model || ev.provider || '';
+      document.getElementById('status').textContent = (ev.provider || '') + ' · ' + (ev.model || '');
+      if (ev.workspace) setWorkspaceReal(ev.workspace);
+      if (ev.skill_note) {
+        const sk = el('div', 'skill-note');
+        sk.title = ev.skill_note;
+        const loaded = (ev.skills && ev.skills.length) ? ev.skills.join('、') : '（未加载技能）';
+        sk.innerHTML = '技能：' + escapeHtml(loaded);
+        cur.head.appendChild(sk);
+      }
+      break;
+    case 'round':
       cur.round = ev.index;
       cur.live = '';
       cur.roundBox = el('div', 'round-block');
@@ -729,14 +577,12 @@ function handle(ev) {
       cur.roundBox.appendChild(cur.answerCur);
       cur.content.appendChild(cur.roundBox);
       break;
-    }
-    case 'thinking': {
+    case 'thinking':
       cur.reasonText += ev.content;
       cur.reasoning.style.display = 'block';
       cur.reasoning.open = true;
       cur.reasonBody.textContent = cur.reasonText;
       break;
-    }
     case 'delta':
       cur.live += ev.content;
       if (cur.answerCur) {
@@ -755,14 +601,11 @@ function handle(ev) {
       }
       target.innerHTML = html;
       cur.raw += (ev.raw || '');
-      // 开始新轮次时标记一轮结束，保存当前 assistant 消息
-      if (cur.round > 1) saveAssistantMessage();
       autoScroll();
       break;
     }
     case 'tool_start':
       addToolBlock(ev);
-      // 记录工具调用信息，等待 tool_end 配对
       const newBlk = cur.blocks[cur.blocks.length - 1];
       if (newBlk && ev.tool_call_id) {
         newBlk._callId = ev.tool_call_id;
@@ -776,7 +619,6 @@ function handle(ev) {
         blk.state.className = 'badge ' + (ev.ok ? 'green' : 'orange');
         blk.out.textContent = ev.output || '(无输出)';
         if (!ev.ok) blk.box.classList.add('fail');
-        // 记录 tool_result 到待保存列表
         (cur._pendingToolResults || (cur._pendingToolResults = [])).push({
           tool_call_id: ev.tool_call_id || blk._callId,
           tool: ev.tool,
@@ -813,11 +655,31 @@ function handle(ev) {
       cur.tail.innerHTML += '<div class="hint" style="margin-top:12px">' + escapeHtml(reasonText) +
         ' · 轮次 ' + cur.round + ' · 工具调用 ' + ev.calls + ' 次 · 用时 ' +
         (ev.elapsed_ms / 1000).toFixed(1) + 's</div>';
-      // 保存完整的 assistant 消息（包含 tool_calls 和 tool_results）
-      saveAssistantMessage();
+      finishTurn();
       break;
     }
+    case 'chat.stopped':
+      cur.tail.innerHTML += '<div class="hint" style="margin-top:12px;color:#b2492f">任务已被中止</div>';
+      finishTurn();
+      break;
   }
+}
+
+document.getElementById('stop').onclick = async function () {
+  if (!currentConvId) return;
+  try {
+    await ws.call('chat.stop', { conversation_id: currentConvId });
+  } catch (err) { toast(err.message, 'err'); }
+};
+
+function finishTurn() {
+  controller = null;
+  cur = null;
+  document.getElementById('send').style.display = 'inline-block';
+  document.getElementById('stop').style.display = 'none';
+  document.getElementById('status').textContent = '';
+  scrollDown();
+  document.getElementById('input').focus();
 }
 
 async function send() {
@@ -835,74 +697,93 @@ async function send() {
   turn.appendChild(head);
   turn.appendChild(el('div', 'user-text', text));
   threadInner.appendChild(turn);
-  pinnedBottom = true; // 新一轮提问：重新自动跟随
+  pinnedBottom = true;
   scrollDown();
-  history.push({ role: 'user', content: text });
 
-  // 从消息中提取 $skillname 提及；无提及则传 null 让后端自动选择技能
   const mentionedSkills = extractSkillNames(text);
-
   cur = newAssistant();
-  controller = new AbortController();
+  controller = currentConvId;
   closePicker();
   document.getElementById('send').style.display = 'none';
   document.getElementById('stop').style.display = 'inline-block';
   document.getElementById('status').innerHTML = '<span class="spinner"></span> 生成中';
 
   try {
-    const resp = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: text,
-        history: history.slice(0, -1),
-        provider_id: document.getElementById('providerSel').value,
-        model: document.getElementById('modelSel').value,
-        workspace: wsValue(),
-        skills: mentionedSkills.length ? mentionedSkills : null
-      }),
-      signal: controller.signal
+    await ws.call('chat.send', {
+      message: text,
+      conversation_id: currentConvId,
+      provider_id: document.getElementById('providerSel').value,
+      model: document.getElementById('modelSel').value,
+      workspace: wsValue(),
+      skills: mentionedSkills.length ? mentionedSkills : null
     });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: '请求失败 ' + resp.status }));
-      throw new Error(err.detail || '请求失败');
-    }
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      const blocks = buffer.split('\n\n');
-      buffer = blocks.pop();
-      for (const block of blocks) {
-        const line = block.split('\n').find(l => l.startsWith('data:'));
-        if (!line) continue;
-        try { handle(JSON.parse(line.slice(5))); } catch (e) { /* 忽略半包 */ }
-      }
-    }
   } catch (err) {
     cur.tail.innerHTML += '<p style="color:#b2492f">' + escapeHtml(err.message) + '</p>';
-  } finally {
-    controller = null;
-    cur = null;
-    stopPeriodicSave(); // SSE 结束，停止定时器
-    document.getElementById('send').style.display = 'inline-block';
-    document.getElementById('stop').style.display = 'none';
-    document.getElementById('status').textContent = '';
-    scrollDown();
-    input.focus();
+    finishTurn();
   }
 }
 
-document.getElementById('send').onclick = async function () {
-  startPeriodicSave();
-  await send();
+document.getElementById('send').onclick = function () {
+  send();
 };
 
+/* ---------- 重连回放 ---------- */
+function onReconnect(data) {
+  // 回放缓冲事件
+  const events = data.events || [];
+  if (events.length && cur) {
+    events.forEach(function (ev) {
+      if (ev.event === 'chat.start') {
+        cur.modelBadge.textContent = ev.model || ev.provider || '';
+        document.getElementById('status').textContent = (ev.provider || '') + ' · ' + (ev.model || '');
+      }
+      handleEvent(ev);
+    });
+  }
+  // 恢复挂起问题
+  const pending = data.pending_questions || [];
+  pending.forEach(function (q) {
+    if (cur) addQuestionBlock({ question: q, id: q.id });
+  });
+  // 运行中任务
+  const running = data.running_tasks || {};
+  Object.keys(running).forEach(function (cid) {
+    if (cid === currentConvId) {
+      controller = cid;
+      document.getElementById('send').style.display = 'none';
+      document.getElementById('stop').style.display = 'inline-block';
+      document.getElementById('status').innerHTML = '<span class="spinner"></span> 生成中';
+    }
+  });
+}
+
+// 监听 chat_event（后端 agent_runtime 推的事件流）
+function onChatEvent(ev) {
+  if (!cur || !ev.conversation_id || ev.conversation_id !== currentConvId) return;
+  handleEvent(ev);
+}
+
+ws.on('chat_event', onChatEvent);
+ws.on('reconnect', onReconnect);
+
+/* ---------- 启动 ---------- */
 loadModels().catch(err => toast(err.message, 'err'));
 refreshConversationList().catch(err => toast(err.message, 'err'));
-loadDefaultWorkspace().catch(err => toast(err.message, 'err'));
-loadSkillList().catch(function () { /* 技能列表加载失败时 $ 选择器不可用，主任务不受影响 */ });
+loadSkillList().catch(function () { /* 技能列表加载失败时 $ 选择器不可用 */ });
 
+// 加载默认工作区
+(async function () {
+  try {
+    const res = await ws.call('health');
+    defaultWorkspace = res.workspace || '';
+  } catch (e) { /* 忽略 */ }
+  const input = document.getElementById('wsInput');
+  input.placeholder = defaultWorkspace ? ('留空使用默认工作区（' + defaultWorkspace + '）') : '留空使用默认工作区';
+  paintWorkspaceHint();
+})();
+document.getElementById('wsInput').addEventListener('input', function () { paintWorkspaceHint(); });
+document.getElementById('wsDefault').onclick = function () {
+  document.getElementById('wsInput').value = '';
+  paintWorkspaceHint();
+  document.getElementById('wsInput').focus();
+};

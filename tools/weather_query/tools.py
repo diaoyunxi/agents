@@ -66,7 +66,7 @@ def run(location: str = "", latitude: float | None = None, longitude: float | No
             "https://api.open-meteo.com/v1/forecast",
             params={
                 "latitude": latitude, "longitude": longitude,
-                "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+                "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation",
                 "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
                 "timezone": "auto", "forecast_days": forecast_days + 1,
             },

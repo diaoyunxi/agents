@@ -53,7 +53,7 @@ def run(url: str, method: str = "GET", headers: dict | None = None, body: str | 
     if len(text) > max_chars:
         text = text[:max_chars] + f"\n... [已截断，共 {len(resp.content)} 字节]"
 
-    head_lines = [k for k in ("content-type", "content-length", "x-request-id") if k in resp.headers.lower()]
+    head_lines = [k for k in ("content-type", "content-length", "x-request-id") if k in resp.headers]
     lines = [f"{method} {url}", f"HTTP {resp.status_code} | {len(resp.content)} bytes"]
     if head_lines:
         lines.append("关键头: " + "; ".join(f"{k}={resp.headers.get(k)}" for k in head_lines))

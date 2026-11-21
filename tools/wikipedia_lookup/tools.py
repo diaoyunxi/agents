@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import urllib.parse
 
 NAME = "wikipedia_lookup"
 DESCRIPTION = "查询维基百科条目：返回标题、摘要与正文若干段落（可指定语言版本）"
@@ -29,8 +30,8 @@ def run(title: str, lang: str = "zh", paragraphs: int = 5, timeout: int = 20) ->
     # 1) 摘要
     summary = None
     try:
-        api = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
-        resp = httpx.get(api, headers={"User-Agent": "agents/1.0"}, timeout=timeout)
+        api = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title, safe='')}"
+        resp = httpx.get(api, headers={"User-Agent": "agents-wikipedia/1.0"}, timeout=timeout)
         if resp.status_code == 404:
             return {"ok": False, "output": f"未找到 {lang} 维基条目: {title}（可试其它语言或改名）"}
         if resp.status_code < 400:
@@ -48,11 +49,18 @@ def run(title: str, lang: str = "zh", paragraphs: int = 5, timeout: int = 20) ->
 
     # 2) 正文纯文本
     try:
-        extract_api = (f"https://{lang}.wikipedia.org/w/api.php"
-                       f"?action=query&prop=extracts&explaintext=1&format=json&exintro=0"
-                       f"&titles={title}")
-        resp2 = httpx.get(extract_api, params={"exchars": 2000},
-                          headers={"User-Agent": "agents/1.0"}, timeout=timeout)
+        extract_api = f"https://{lang}.wikipedia.org/w/api.php"
+        resp2_params = {
+            "action": "query",
+            "prop": "extracts",
+            "explaintext": 1,
+            "format": "json",
+            "exintro": 0,
+            "titles": title,
+            "exchars": 2000,
+        }
+        resp2 = httpx.get(extract_api, params=resp2_params,
+                          headers={"User-Agent": "agents-wikipedia/1.0"}, timeout=timeout)
         if resp2.status_code < 400:
             pages = resp2.json().get("query", {}).get("pages", {})
             text = next(iter(pages.values()), {}).get("extract", "") if pages else ""

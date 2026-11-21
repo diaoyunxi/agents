@@ -26,6 +26,11 @@ PARAMETERS = {
 # 这里始终启用，执行期若找不到解释器会明确报错。
 
 
+def _stdin_input(stdin: str) -> str | None:
+    text = str(stdin or "")
+    return text or None
+
+
 def run(code: str, timeout: int = 30, stdin: str = "") -> dict:
     if not code or not code.strip():
         return {"ok": False, "output": "code 不能为空"}
@@ -41,7 +46,7 @@ def run(code: str, timeout: int = 30, stdin: str = "") -> dict:
     try:
         proc = subprocess.run(
             [sys.executable, str(script)],
-            input=(stdin or "").encode("utf-8"),
+            input=_stdin_input(stdin),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout, cwd=str(ws),
         )

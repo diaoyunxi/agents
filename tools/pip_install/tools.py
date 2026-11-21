@@ -101,7 +101,8 @@ def run(packages: list[str], constraints_file: str = "", upgrade: bool = False, 
             pass
         try:
             import tools.loader as _loader
-            _loader.discover(force=True)
+            if hasattr(_loader, "discover"):
+                _loader.discover()
         except Exception:  # noqa: BLE001
             pass
         result["output"] += "\n\n✓ 已刷新能力缓存并重新加载工具，被门控停用的工具应已自动恢复。"

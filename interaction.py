@@ -79,6 +79,23 @@ async def wait(qid: str, timeout: int = 600) -> str:
     return str(answer)
 
 
+def pending_questions() -> list[dict]:
+    """返回当前所有挂起（未回答且未结束）的问题，供重连恢复。"""
+
+    out = []
+    for qid, item in _PENDING.items():
+        if item["future"].done():
+            continue
+        out.append({
+            "id": qid,
+            "question": item["question"],
+            "options": item["options"],
+            "multi_select": item["multi_select"],
+            "created_at": item["created_at"],
+        })
+    return out
+
+
 def cancel_all(reason: str = "会话已结束") -> None:
     """对话终止时唤醒所有挂起的问题，避免工具永远挂起。"""
 
@@ -97,4 +114,4 @@ def _gc() -> None:
             _PENDING.pop(qid, None)
 
 
-__all__ = ["create_question", "resolve", "get", "wait", "cancel_all"]
+__all__ = ["create_question", "resolve", "get", "wait", "pending_questions", "cancel_all"]

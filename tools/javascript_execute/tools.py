@@ -24,6 +24,11 @@ PARAMETERS = {
 REQUIRES = ["cli:node"]  # 本机未装 node 时自动停用
 
 
+def _stdin_input(stdin: str) -> str | None:
+    text = str(stdin or "")
+    return text or None
+
+
 def run(code: str, timeout: int = 30, stdin: str = "") -> dict:
     if not code or not code.strip():
         return {"ok": False, "output": "code 不能为空"}
@@ -41,7 +46,8 @@ def run(code: str, timeout: int = 30, stdin: str = "") -> dict:
         script.unlink(missing_ok=True)
         return {"ok": False, "output": "未找到 node，无法执行 JS。请安装 Node.js 或改用 python_execute。"}
     try:
-        proc = subprocess.run([node, str(script)], input=(stdin or "").encode("utf-8"),
+        proc = subprocess.run([node, str(script)],
+                              input=_stdin_input(stdin),
                               capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=timeout, cwd=str(ws))
     except subprocess.TimeoutExpired:
